@@ -1,0 +1,7 @@
+### Prueba de Agendamiento
+POST http://127.0.0.1:5000/agendar
+Content-Type: application/json
+
+{
+    "comando": "Revisar el informe de marketing el próximo miércoles"
+}

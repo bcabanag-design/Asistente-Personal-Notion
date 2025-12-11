@@ -1,0 +1,10 @@
+Invoke-RestMethod : 
+400 Bad Request
+Bad Request
+Failed to decode JSON object: &#39;utf-8&#39; codec can&#39;t decode byte 0xf1 in position 24: invalid continuation byte    
+En línea: 1 Carácter: 1
++ Invoke-RestMethod -Uri "http://127.0.0.1:5000/agendar" -Method Post - ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (System.Net.HttpWebRequest:HttpWebRequest) [Invoke-RestMethod], WebException
+    + FullyQualifiedErrorId : WebCmdletWebResponseException,Microsoft.PowerShell.Commands.InvokeRestMethodCommand
+Exit code: 1
