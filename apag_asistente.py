@@ -398,5 +398,116 @@ def health_check():
         }
     }), 200
 
+# --- CONFIGURACIÓN TELEGRAM ---
+TELEGRAM_TOKEN = "8277083663:AAFQzy180bpJGhcHn-BN9ESgVvVySjTRGAo"
+TELEGRAM_CHAT_ID = "2135365686"
+
+# --- ENDPOINT DE RECORDATORIOS (PARA TASKER) ---
+@app.route("/check_reminders", methods=["GET"])
+def check_reminders():
+    if not NOTION_TOKEN or not DATABASE_ID:
+        return jsonify({"error": "Configuración incompleta"}), 500
+
+    import requests
+    import pytz
+    
+    # 1. Definir ventana de tiempo (Ahora hasta Ahora + 1 Hora)
+    tz = pytz.timezone(TIMEZONE)
+    now = datetime.now(tz)
+    # Ajuste: Ventana de 1.5 horas para asegurar no perder nada cercano
+    next_window = now + timedelta(minutes=90) 
+    
+    now_iso = now.isoformat()
+    next_window_iso = next_window.isoformat()
+    
+    # 2. Construir Query a Notion
+    url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
+    headers = {
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
+    }
+    
+    # Filtro: (Fecha >= Ahora) AND (Fecha <= Ahora + 90min) AND (Estado != Listo)
+    query_payload = {
+        "filter": {
+            "and": [
+                {
+                    "property": "Fecha de Recordatorio",
+                    "date": {
+                        "on_or_after": now_iso
+                    }
+                },
+                {
+                    "property": "Fecha de Recordatorio",
+                    "date": {
+                        "on_or_before": next_window_iso
+                    }
+                },
+                {
+                    "property": "Estado",
+                    "status": {
+                        "does_not_equal": "Listo"
+                    }
+                }
+            ]
+        }
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=query_payload)
+        
+        if response.status_code != 200:
+             return jsonify({"error": "Error consultando Notion", "details": response.json()}), response.status_code
+             
+        data = response.json()
+        tasks = []
+        
+        for result in data.get("results", []):
+            props = result.get("properties", {})
+            
+            # Extraer Título
+            title_list = props.get("Nombre", {}).get("title", [])
+            title = title_list[0].get("text", {}).get("content", "Sin título") if title_list else "Sin título"
+            
+            # Extraer Hora
+            date_prop = props.get("Fecha de Recordatorio", {}).get("date", {})
+            start_date_str = date_prop.get("start")
+            
+            # Formatear hora para lectura humana (solo hora)
+            hora_legible = "??:??"
+            if start_date_str:
+                try:
+                    dt = dateparser.parse(start_date_str)
+                    hora_legible = dt.strftime("%I:%M %p")
+                except:
+                    pass
+            
+            # Extraer Prioridad
+            priority = props.get("Prioridad", {}).get("select", {}).get("name", "Normal")
+            
+            tasks.append(f"⏰ *{hora_legible}*: {title} ({priority})")
+            
+        count = len(tasks)
+        telegram_status = "No message sent (count sub-zero)"
+        
+        # 3. ENVIAR A TELEGRAM SI HAY TAREAS
+        if count > 0:
+            msg_text = f"🚨 *TIENES {count} TAREAS PENDIENTES:*\n\n" + "\n".join(tasks)
+            tg_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            tg_payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg_text, "parse_mode": "Markdown"}
+            requests.post(tg_url, json=tg_payload)
+            telegram_status = "Message sent"
+            
+        return jsonify({
+            "count": count,
+            "telegram_status": telegram_status,
+            "tasks_found": tasks
+        }), 200
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(debug=True)
