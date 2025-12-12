@@ -92,8 +92,9 @@ def process_command(comando_completo):
     # --- 2. DETECCIÓN Y EXTRACCIÓN DE METADATOS (Prioridad, Estado, Recordatorio) ---
     
     # Prioridad
+    # Prioridad
     prioridad_patterns = {
-        'Alta': r'prioridad\s+alta|urgente|muy\s+importante',
+        'Alta': r'prioridad\s+alta|urgente|muy\s+importante|importante|importe',
         'Baja': r'prioridad\s+baja|luego|no\s+urgente',
         'Media': r'prioridad\s+media|normal' # Optional explicit normal
     }
