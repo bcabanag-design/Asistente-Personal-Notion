@@ -80,17 +80,17 @@ def process_command(comando_completo):
     
     # --- 2. DETECCIÓN DE REGLAS FIJAS (Prioridad y Recordatorio) ---
     
-    # Detección de Prioridad (Usando la regla completa)
-    if re.search(r'prioridad alta|urgente', comando_regla, re.IGNORECASE):
+    # Detección de Prioridad (Usando el comando completo para buscar en todo el texto)
+    if re.search(r'prioridad alta|urgente', comando_completo, re.IGNORECASE):
         prioridad = 'Alta'
-    elif re.search(r'prioridad baja|luego', comando_regla, re.IGNORECASE):
+    elif re.search(r'prioridad baja|luego', comando_completo, re.IGNORECASE):
         prioridad = 'Baja'
     
-    # Detección de Reglas de Recordatorio Fijas
-    if re.search(r'un d[ií]a antes', comando_regla, re.IGNORECASE):
+    # Detección de Reglas de Recordatorio Fijas (en el comando completo)
+    if re.search(r'un d[ií]a antes|recor?d[aá]r?me?\s+un\s+d[ií]a\s+antes', comando_completo, re.IGNORECASE):
         recordatorio_base = '1 día antes'
         regla_timedelta = timedelta(days=1)
-    elif re.search(r'una hora antes', comando_regla, re.IGNORECASE):
+    elif re.search(r'una hora antes|recor?d[aá]r?me?\s+una?\s+hora\s+antes', comando_completo, re.IGNORECASE):
         recordatorio_base = '1 hora antes'
         regla_timedelta = timedelta(hours=1)
     
