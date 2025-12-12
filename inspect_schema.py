@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
-DATABASE_ID = os.getenv("DATABASE_ID")
+DATABASE_ID = os.getenv("DATABASE_ID")  # Changed from NOTION_DATABASE_ID
 
 client = Client(auth=NOTION_TOKEN)
 

@@ -122,7 +122,7 @@ def process_command(comando_completo):
             }
         },
         "Estado": {
-            "select": {
+            "status": {
                 "name": estado
             }
         },
