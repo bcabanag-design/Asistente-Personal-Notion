@@ -79,10 +79,10 @@ def process_command(comando_completo):
     }
     
     # Buscamos fecha SOLO en el comando de regla
+    # Sin restricción de idioma para mejor detección
     fecha_encontrada = dateparser.parse(
         comando_regla, 
-        settings=settings, 
-        languages=['es']
+        settings=settings
     )
 
     if fecha_encontrada:
