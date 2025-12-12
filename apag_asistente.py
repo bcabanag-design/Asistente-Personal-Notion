@@ -68,11 +68,12 @@ def process_command(comando_completo):
     settings = {
         'PREFER_DATES_FROM': 'future', 
         'RETURN_AS_TIMEZONE_AWARE': True,
-        'TIMEZONE': TIMEZONE 
+        'TIMEZONE': TIMEZONE,
+        'LANGUAGE': 'es'
     }
     
     # Intentamos parsear el comando LIMPIO
-    fecha_encontrada = dateparser.parse(comando_limpio, settings=settings, languages=['es'])
+    fecha_encontrada = dateparser.parse(comando_limpio, settings=settings)
 
     if fecha_encontrada:
         fecha_tarea_dt = fecha_encontrada
