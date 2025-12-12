@@ -78,12 +78,54 @@ def process_command(comando_completo):
         'TIMEZONE': TIMEZONE 
     }
     
-    # Buscamos fecha SOLO en el comando de regla
-    # Sin restricción de idioma para mejor detección
-    fecha_encontrada = dateparser.parse(
-        comando_regla, 
-        settings=settings
-    )
+    # Primero intentamos detección personalizada para expresiones españolas no soportadas
+    import pytz
+    from datetime import date
+    
+    tz = pytz.timezone(TIMEZONE)
+    hoy = datetime.now(tz)
+    fecha_encontrada = None
+    
+    # Mapeo de días de la semana
+    dias_semana = {
+        'lunes': 0, 'martes': 1, 'miércoles': 2, 'miercoles': 2,
+        'jueves': 3, 'viernes': 4, 'sábado': 5, 'sabado': 5, 'domingo': 6
+    }
+    
+    # Detectar "pasado mañana"
+    if re.search(r'pasado\s+mañana', comando_regla, re.IGNORECASE):
+        fecha_encontrada = hoy + timedelta(days=2)
+        # Intentar extraer hora
+        hora_match = re.search(r'(\d{1,2})\s*(am|pm|de la mañana|de la tarde|de la noche)?', comando_regla, re.IGNORECASE)
+        if hora_match:
+            hora = int(hora_match.group(1))
+            periodo = hora_match.group(2) or ''
+            if 'pm' in periodo.lower() or 'tarde' in periodo.lower() or 'noche' in periodo.lower():
+                if hora < 12:
+                    hora += 12
+            fecha_encontrada = fecha_encontrada.replace(hour=hora, minute=0, second=0, microsecond=0)
+    
+    # Detectar "el [día de la semana]"
+    elif match := re.search(r'(?:el\s+)?(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)', comando_regla, re.IGNORECASE):
+        dia_nombre = match.group(1).lower().replace('á', 'a').replace('é', 'e')
+        dia_objetivo = dias_semana.get(dia_nombre, 0)
+        dias_adelante = (dia_objetivo - hoy.weekday()) % 7
+        if dias_adelante == 0:
+            dias_adelante = 7  # Si es hoy, ir al próximo
+        fecha_encontrada = hoy + timedelta(days=dias_adelante)
+        # Intentar extraer hora
+        hora_match = re.search(r'(\d{1,2})\s*(am|pm|de la mañana|de la tarde|de la noche)?', comando_regla, re.IGNORECASE)
+        if hora_match:
+            hora = int(hora_match.group(1))
+            periodo = hora_match.group(2) or ''
+            if 'pm' in periodo.lower() or 'tarde' in periodo.lower() or 'noche' in periodo.lower():
+                if hora < 12:
+                    hora += 12
+            fecha_encontrada = fecha_encontrada.replace(hour=hora, minute=0, second=0, microsecond=0)
+    
+    # Si no hubo detección personalizada, usar dateparser
+    if not fecha_encontrada:
+        fecha_encontrada = dateparser.parse(comando_regla, settings=settings)
 
     if fecha_encontrada:
         fecha_tarea_dt = fecha_encontrada
