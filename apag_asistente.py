@@ -46,7 +46,7 @@ def process_command(comando_completo):
         tarea_titulo = comando_completo
         comando_regla = comando_completo
         
-    prioridad = 'Media' 
+    prioridad = 'Normal' 
     estado = 'Sin empezar' 
     recordatorio_base = 'Manual'
     
