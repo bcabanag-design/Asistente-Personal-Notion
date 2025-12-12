@@ -155,7 +155,11 @@ def process_command(comando_completo):
 @app.route("/agendar", methods=["POST"])
 def agendar_tarea():
     if not NOTION_TOKEN or not DATABASE_ID:
-        return jsonify({"error": "Configuración de Notion faltante"}), 500
+        return jsonify({
+            "error": "Configuración de Notion faltante",
+            "NOTION_TOKEN_exists": bool(NOTION_TOKEN),
+            "DATABASE_ID_exists": bool(DATABASE_ID)
+        }), 500
 
     try:
         data = request.get_json()
@@ -185,18 +189,29 @@ def agendar_tarea():
         
         response = requests.post(url, headers=headers, json=payload)
         
+        # Notion devuelve 200 para creación exitosa
         if response.status_code == 200:
             return jsonify({"mensaje": "Tarea agendada con éxito", "data": properties_payload}), 200
         else:
+            # Intentar obtener el JSON de error de Notion
+            try:
+                notion_error = response.json()
+            except:
+                notion_error = {"raw_text": response.text}
+            
             return jsonify({
                 "error": "Error al insertar en Notion",
                 "status_code": response.status_code,
-                "notion_response": response.json(),
+                "notion_response": notion_error,
                 "payload_sent": properties_payload 
             }), response.status_code
 
     except Exception as e:
-        return jsonify({"error": f"Error interno del servidor: {str(e)}"}), 500
+        import traceback
+        return jsonify({
+            "error": f"Error interno del servidor: {str(e)}",
+            "traceback": traceback.format_exc()
+        }), 500
 
 # --- ENDPOINT DEPURACIÓN AÑADIDO (PARA VER EL JSON GENERADO) ---
 @app.route("/debug", methods=["POST"])
