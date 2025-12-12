@@ -35,7 +35,17 @@ def format_date_to_iso(dt_object):
 # Función principal para procesar el comando y construir la carga útil de Notion
 def process_command(comando_completo):
     # --- 1. CONFIGURACIÓN DE VALORES POR DEFECTO ---
-    tarea_titulo = comando_completo
+    
+    # 🚨 Buscamos el separador estricto '#'
+    if '#' in comando_completo:
+        # Dividimos el comando en Título y Comando de Fecha/Regla
+        tarea_titulo, comando_regla = comando_completo.split('#', 1)
+        comando_regla = comando_regla.strip()
+    else:
+        # Si no hay separador, asumimos que todo es el título/comando
+        tarea_titulo = comando_completo
+        comando_regla = comando_completo
+        
     prioridad = 'Media' 
     estado = 'Pendiente' 
     recordatorio_base = 'Manual'
@@ -43,25 +53,22 @@ def process_command(comando_completo):
     fecha_tarea_dt = None
     fecha_recordatorio_dt = None
     regla_timedelta = None
-    comando_limpio = comando_completo 
-
+    
     # --- 2. DETECCIÓN DE REGLAS FIJAS (Prioridad y Recordatorio) ---
     
-    # Detección de Prioridad 
-    if re.search(r'prioridad alta|urgente', comando_completo, re.IGNORECASE):
+    # Detección de Prioridad (Usando la regla completa)
+    if re.search(r'prioridad alta|urgente', comando_regla, re.IGNORECASE):
         prioridad = 'Alta'
-    elif re.search(r'prioridad baja|luego', comando_completo, re.IGNORECASE):
+    elif re.search(r'prioridad baja|luego', comando_regla, re.IGNORECASE):
         prioridad = 'Baja'
     
     # Detección de Reglas de Recordatorio Fijas
-    if re.search(r'un d[ií]a antes', comando_completo, re.IGNORECASE):
+    if re.search(r'un d[ií]a antes', comando_regla, re.IGNORECASE):
         recordatorio_base = '1 día antes'
         regla_timedelta = timedelta(days=1)
-        comando_limpio = re.sub(r',? y recuérdamelo un d[ií]a antes\.?', '', comando_completo, flags=re.IGNORECASE).strip()
-    elif re.search(r'una hora antes', comando_completo, re.IGNORECASE):
+    elif re.search(r'una hora antes', comando_regla, re.IGNORECASE):
         recordatorio_base = '1 hora antes'
         regla_timedelta = timedelta(hours=1)
-        comando_limpio = re.sub(r',? y recuérdamelo una hora antes\.?', '', comando_completo, flags=re.IGNORECASE).strip()
     
     # --- 3. EXTRACCIÓN DE FECHAS ---
     
@@ -71,23 +78,15 @@ def process_command(comando_completo):
         'TIMEZONE': TIMEZONE 
     }
     
-    # Intentamos parsear el comando LIMPIO
-    fecha_encontrada = dateparser.parse(comando_limpio, settings=settings, languages=['es'])
+    # Buscamos fecha SOLO en el comando de regla
+    fecha_encontrada = dateparser.parse(
+        comando_regla, 
+        settings=settings, 
+        languages=['es']
+    )
 
     if fecha_encontrada:
         fecha_tarea_dt = fecha_encontrada
-        # Si se encuentra una fecha, intentamos crear el título sin ella
-        try:
-            # Crea una representación simple de la fecha para eliminarla del comando
-            fecha_str_to_remove = fecha_encontrada.strftime("%Y-%m-%d") 
-            tarea_titulo = comando_limpio.replace(fecha_str_to_remove, '').strip() 
-        except:
-            # Si hay algún error en la extracción, usa el comando limpio como respaldo
-            tarea_titulo = comando_limpio
-
-    # Si la extracción de fecha falló (fecha_encontrada es None), el título es el comando original.
-    if not fecha_encontrada:
-        tarea_titulo = comando_completo
 
     # --- 4. CÁLCULO DE LA FECHA DE RECORDATORIO ---
     
@@ -95,6 +94,11 @@ def process_command(comando_completo):
         fecha_recordatorio_dt = fecha_tarea_dt - regla_timedelta
     elif fecha_tarea_dt:
         fecha_recordatorio_dt = fecha_tarea_dt
+
+    # Aseguramos un título limpio
+    tarea_titulo = tarea_titulo.strip() 
+    if not tarea_titulo:
+         tarea_titulo = "Tarea sin nombre"
 
 
     # --- 5. CONSTRUCCIÓN DEL JSON FINAL PARA NOTION (CON CLAVES CORREGIDAS) ---
