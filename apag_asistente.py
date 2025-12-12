@@ -10,7 +10,7 @@ from flask import Flask, request, jsonify
 
 # --- CONFIGURACIÓN DE NOTION ---
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
-DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
+DATABASE_ID = os.environ.get("DATABASE_ID")
 
 # --- CONFIGURACIÓN DE FECHA/HORA ---
 TIMEZONE = 'America/Lima' 
@@ -237,8 +237,8 @@ def health_check():
         "config": {
             "NOTION_TOKEN": token_status,
             "NOTION_TOKEN_preview": token_preview,
-            "NOTION_DATABASE_ID": db_status,
-            "NOTION_DATABASE_ID_preview": db_preview
+            "DATABASE_ID": db_status,
+            "DATABASE_ID_preview": db_preview
         }
     }), 200
 
