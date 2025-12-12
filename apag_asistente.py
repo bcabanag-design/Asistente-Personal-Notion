@@ -45,7 +45,21 @@ def process_command(comando_completo):
         r'(\d{1,2}\s+de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(?:\s+(?:de\s+)?\d{4})?(?:\s+a\s+las?\s+\d{1,2}(?:\s*(?:am|pm|de\s+la\s+(?:mañana|tarde|noche)))?)?)',
         r'(a\s+las?\s+\d{1,2}(?:\s*(?:am|pm|de\s+la\s+(?:mañana|tarde|noche)))?)',
     ]
-    
+
+    # Helper function to extract and remove matching patterns from text
+    def extract_and_remove(text, patterns_dict, default_val):
+        found_val = default_val
+        cleaned_text = text
+        for val, regex_pattern in patterns_dict.items():
+            match = re.search(regex_pattern, cleaned_text, re.IGNORECASE)
+            if match:
+                found_val = val
+                # Remove the matched text from the command
+                cleaned_text = cleaned_text.replace(match.group(0), " ").strip()
+                # We stop after first match per category to avoid conflicts
+                break
+        return found_val, cleaned_text
+
     # Buscamos el separador estricto '#' primero
     if '#' in comando_completo:
         tarea_titulo, comando_regla = comando_completo.split('#', 1)
@@ -59,11 +73,8 @@ def process_command(comando_completo):
             match = re.search(patron, comando_completo, re.IGNORECASE)
             if match:
                 comando_regla = match.group(1)
-                # Remover la fecha del título
-                tarea_titulo = comando_completo.replace(match.group(0), '').strip()
-                # Limpiar conectores residuales
-                tarea_titulo = re.sub(r'^(que\s+|para\s+|tengo\s+que\s+)', '', tarea_titulo, flags=re.IGNORECASE)
-                tarea_titulo = re.sub(r'\s{2,}', ' ', tarea_titulo).strip()
+                # Remover la fecha del título (DESACTIVADO: El usuario quiere conservar la fecha en el título)
+                # tarea_titulo = comando_completo.replace(match.group(0), '').strip()
                 break
         
         # Si no se encontró fecha, usar todo el comando como regla también
@@ -78,22 +89,45 @@ def process_command(comando_completo):
     fecha_recordatorio_dt = None
     regla_timedelta = None
     
-    # --- 2. DETECCIÓN DE REGLAS FIJAS (Prioridad y Recordatorio) ---
+    # --- 2. DETECCIÓN Y EXTRACCIÓN DE METADATOS (Prioridad, Estado, Recordatorio) ---
     
-    # Detección de Prioridad (Usando el comando completo para buscar en todo el texto)
-    if re.search(r'prioridad alta|urgente', comando_completo, re.IGNORECASE):
-        prioridad = 'Alta'
-    elif re.search(r'prioridad baja|luego', comando_completo, re.IGNORECASE):
-        prioridad = 'Baja'
+    # Prioridad
+    prioridad_patterns = {
+        'Alta': r'prioridad\s+alta|urgente|muy\s+importante',
+        'Baja': r'prioridad\s+baja|luego|no\s+urgente',
+        'Media': r'prioridad\s+media|normal' # Optional explicit normal
+    }
+    prioridad, tarea_titulo = extract_and_remove(tarea_titulo, prioridad_patterns, prioridad)
+
+    # Estado
+    estado_patterns = {
+        'En curso': r'estado\s+en\s+curso|en\s+proceso|trabajando',
+        'Listo': r'estado\s+listo|hecho|terminado|completado|finalizado',
+        'Sin empezar': r'estado\s+sin\s+empezar|pendiente'
+    }
+    estado, tarea_titulo = extract_and_remove(tarea_titulo, estado_patterns, estado)
+
+    # Recordatorio
+    # Maps internal value to regex
+    recordatorio_patterns = {
+        '1 día antes': r'recor?d[aá]r?me?\s+(?:un|1)\s+d[ií]a\s+antes|(?:un|1)\s+d[ií]a\s+antes',
+        '1 hora antes': r'recor?d[aá]r?me?\s+(?:una|1)\s+hora\s+antes|(?:una|1)\s+hora\s+antes'
+    }
+    recordatorio_base, tarea_titulo = extract_and_remove(tarea_titulo, recordatorio_patterns, recordatorio_base)
     
-    # Detección de Reglas de Recordatorio Fijas (en el comando completo)
-    if re.search(r'un d[ií]a antes|recor?d[aá]r?me?\s+un\s+d[ií]a\s+antes', comando_completo, re.IGNORECASE):
-        recordatorio_base = '1 día antes'
+    # Logic to set timedelta object based on the extracted string
+    if recordatorio_base == '1 día antes':
         regla_timedelta = timedelta(days=1)
-    elif re.search(r'una hora antes|recor?d[aá]r?me?\s+una?\s+hora\s+antes', comando_completo, re.IGNORECASE):
-        recordatorio_base = '1 hora antes'
+    elif recordatorio_base == '1 hora antes':
         regla_timedelta = timedelta(hours=1)
-    
+
+    # Limpieza final del título
+    # Remover conectores residuales al inicio
+    tarea_titulo = re.sub(r'^(que\s+|para\s+|tengo\s+que\s+)', '', tarea_titulo, flags=re.IGNORECASE)
+    # Remover espacios múltiples
+    tarea_titulo = re.sub(r'\s{2,}', ' ', tarea_titulo).strip()
+
+
     # --- 3. EXTRACCIÓN DE FECHAS ---
     
     settings = {
@@ -107,7 +141,12 @@ def process_command(comando_completo):
     from datetime import date
     
     tz = pytz.timezone(TIMEZONE)
-    hoy = datetime.now(tz)
+    try:
+        hoy = datetime.now(tz)
+    except:
+        # Fallback if tz fails (unlikely)
+        hoy = datetime.now()
+        
     fecha_encontrada = None
     
     # Mapeo de días de la semana
@@ -117,7 +156,7 @@ def process_command(comando_completo):
     }
     
     # Detectar "pasado mañana"
-    if re.search(r'pasado\s+mañana', comando_regla, re.IGNORECASE):
+    if comando_regla and re.search(r'pasado\s+mañana', comando_regla, re.IGNORECASE):
         fecha_encontrada = hoy + timedelta(days=2)
         # Intentar extraer hora
         hora_match = re.search(r'(\d{1,2})\s*(am|pm|de la mañana|de la tarde|de la noche)?', comando_regla, re.IGNORECASE)
@@ -130,7 +169,7 @@ def process_command(comando_completo):
             fecha_encontrada = fecha_encontrada.replace(hour=hora, minute=0, second=0, microsecond=0)
     
     # Detectar "el [día de la semana]"
-    elif match := re.search(r'(?:el\s+)?(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)', comando_regla, re.IGNORECASE):
+    elif comando_regla and (match := re.search(r'(?:el\s+)?(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)', comando_regla, re.IGNORECASE)):
         dia_nombre = match.group(1).lower().replace('á', 'a').replace('é', 'e')
         dia_objetivo = dias_semana.get(dia_nombre, 0)
         dias_adelante = (dia_objetivo - hoy.weekday()) % 7
@@ -148,8 +187,44 @@ def process_command(comando_completo):
             fecha_encontrada = fecha_encontrada.replace(hour=hora, minute=0, second=0, microsecond=0)
     
     # Si no hubo detección personalizada, usar dateparser
-    if not fecha_encontrada:
+    if not fecha_encontrada and comando_regla:
         fecha_encontrada = dateparser.parse(comando_regla, settings=settings)
+
+    # --- 3.1. EXTRACCIÓN DE HORA INDEPENDIENTE (Fix para "mañana ... a las 6 pm") ---
+    # Regex para buscar "a las X [pm]", "a la 1 [pm]"
+    time_regex = r'(?:a\s+las?|a\s+la)\s+(\d{1,2}(?::\d{2})?)\s*(am|pm|p\.?m\.?|a\.?m\.?|de\s+la\s+(?:mañana|tarde|noche))?'
+    
+    match_time = re.search(time_regex, tarea_titulo, re.IGNORECASE)
+    if match_time:
+        # Extraer datos de hora
+        hora_str = match_time.group(1)
+        periodo = match_time.group(2) or ''
+        
+        # Parsear hora y minutos
+        if ':' in hora_str:
+            hora_val, min_val = map(int, hora_str.split(':'))
+        else:
+            hora_val = int(hora_str)
+            min_val = 0
+            
+        # Ajuste AM/PM
+        periodo = periodo.lower().replace('.', '')
+        if 'pm' in periodo or 'tarde' in periodo or 'noche' in periodo:
+            if hora_val < 12:
+                hora_val += 12
+        elif 'am' in periodo or 'mañana' in periodo:
+            if hora_val == 12:
+                hora_val = 0
+                
+        # Si ya teníamos fecha, actualizamos su hora
+        if fecha_encontrada:
+            fecha_encontrada = fecha_encontrada.replace(hour=hora_val, minute=min_val, second=0, microsecond=0)
+        else:
+            # Si no, asumimos Hoy + Hora
+            fecha_encontrada = hoy.replace(hour=hora_val, minute=min_val, second=0, microsecond=0)
+            
+        # Remover la hora del título (DESACTIVADO: El usuario quiere conservarla)
+        # tarea_titulo = tarea_titulo.replace(match_time.group(0), " ").strip()
 
     if fecha_encontrada:
         fecha_tarea_dt = fecha_encontrada
@@ -162,7 +237,6 @@ def process_command(comando_completo):
         fecha_recordatorio_dt = fecha_tarea_dt
 
     # Aseguramos un título limpio
-    tarea_titulo = tarea_titulo.strip() 
     if not tarea_titulo:
          tarea_titulo = "Tarea sin nombre"
 
