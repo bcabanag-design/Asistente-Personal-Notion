@@ -47,7 +47,7 @@ def process_command(comando_completo):
         comando_regla = comando_completo
         
     prioridad = 'Media' 
-    estado = 'Pendiente' 
+    estado = 'Sin empezar' 
     recordatorio_base = 'Manual'
     
     fecha_tarea_dt = None
