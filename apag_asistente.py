@@ -76,16 +76,18 @@ def process_command(comando_completo):
 
     if fecha_encontrada:
         fecha_tarea_dt = fecha_encontrada
-        # Título: Intentamos eliminar la cadena de fecha del comando limpio
+        # Si se encuentra una fecha, intentamos crear el título sin ella
         try:
-            # Crea una representación de la fecha encontrada para eliminarla del comando
-            fecha_str_to_remove = fecha_encontrada.strftime("%Y-%m-%d %H:%M:%S")
+            # Crea una representación simple de la fecha para eliminarla del comando
+            fecha_str_to_remove = fecha_encontrada.strftime("%Y-%m-%d") 
             tarea_titulo = comando_limpio.replace(fecha_str_to_remove, '').strip() 
-        except Exception:
+        except:
+            # Si hay algún error en la extracción, usa el comando limpio como respaldo
             tarea_titulo = comando_limpio
 
-    if not tarea_titulo:
-        tarea_titulo = comando_limpio
+    # Si la extracción de fecha falló (fecha_encontrada es None), el título es el comando original.
+    if not fecha_encontrada:
+        tarea_titulo = comando_completo
 
     # --- 4. CÁLCULO DE LA FECHA DE RECORDATORIO ---
     
