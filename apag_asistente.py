@@ -221,5 +221,26 @@ def debug_command():
     except Exception as e:
         return jsonify({"error": f"Error interno en debug: {str(e)}"}), 500
 
+# --- ENDPOINT DE DIAGNÓSTICO (VERIFICAR CONFIGURACIÓN) ---
+@app.route("/health", methods=["GET"])
+def health_check():
+    """Endpoint para verificar la configuración del servidor."""
+    token_status = "✅ Configurado" if NOTION_TOKEN else "❌ NO CONFIGURADO"
+    db_status = "✅ Configurado" if DATABASE_ID else "❌ NO CONFIGURADO"
+    
+    # Mostrar solo los primeros/últimos caracteres por seguridad
+    token_preview = f"{NOTION_TOKEN[:10]}...{NOTION_TOKEN[-4:]}" if NOTION_TOKEN and len(NOTION_TOKEN) > 14 else "N/A"
+    db_preview = f"{DATABASE_ID[:8]}...{DATABASE_ID[-4:]}" if DATABASE_ID and len(DATABASE_ID) > 12 else "N/A"
+    
+    return jsonify({
+        "status": "Server Running",
+        "config": {
+            "NOTION_TOKEN": token_status,
+            "NOTION_TOKEN_preview": token_preview,
+            "NOTION_DATABASE_ID": db_status,
+            "NOTION_DATABASE_ID_preview": db_preview
+        }
+    }), 200
+
 if __name__ == "__main__":
     app.run(debug=True)
