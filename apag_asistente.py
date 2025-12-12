@@ -36,15 +36,39 @@ def format_date_to_iso(dt_object):
 def process_command(comando_completo):
     # --- 1. CONFIGURACIÓN DE VALORES POR DEFECTO ---
     
-    # 🚨 Buscamos el separador estricto '#'
+    # Patrones de fecha en español para detectar y extraer
+    patrones_fecha = [
+        r'(pasado\s+mañana(?:\s+a\s+las?\s+\d{1,2}(?:\s*(?:am|pm|de\s+la\s+(?:mañana|tarde|noche)))?)?)',
+        r'(mañana(?:\s+a\s+las?\s+\d{1,2}(?:\s*(?:am|pm|de\s+la\s+(?:mañana|tarde|noche)))?)?)',
+        r'(hoy(?:\s+a\s+las?\s+\d{1,2}(?:\s*(?:am|pm|de\s+la\s+(?:mañana|tarde|noche)))?)?)',
+        r'((?:el\s+)?(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)(?:\s+a\s+las?\s+\d{1,2}(?:\s*(?:am|pm|de\s+la\s+(?:mañana|tarde|noche)))?)?)',
+        r'(\d{1,2}\s+de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(?:\s+(?:de\s+)?\d{4})?(?:\s+a\s+las?\s+\d{1,2}(?:\s*(?:am|pm|de\s+la\s+(?:mañana|tarde|noche)))?)?)',
+        r'(a\s+las?\s+\d{1,2}(?:\s*(?:am|pm|de\s+la\s+(?:mañana|tarde|noche)))?)',
+    ]
+    
+    # Buscamos el separador estricto '#' primero
     if '#' in comando_completo:
-        # Dividimos el comando en Título y Comando de Fecha/Regla
         tarea_titulo, comando_regla = comando_completo.split('#', 1)
         comando_regla = comando_regla.strip()
     else:
-        # Si no hay separador, asumimos que todo es el título/comando
+        # Sin separador: intentamos extraer automáticamente la fecha del texto
+        comando_regla = None
         tarea_titulo = comando_completo
-        comando_regla = comando_completo
+        
+        for patron in patrones_fecha:
+            match = re.search(patron, comando_completo, re.IGNORECASE)
+            if match:
+                comando_regla = match.group(1)
+                # Remover la fecha del título
+                tarea_titulo = comando_completo.replace(match.group(0), '').strip()
+                # Limpiar conectores residuales
+                tarea_titulo = re.sub(r'^(que\s+|para\s+|tengo\s+que\s+)', '', tarea_titulo, flags=re.IGNORECASE)
+                tarea_titulo = re.sub(r'\s{2,}', ' ', tarea_titulo).strip()
+                break
+        
+        # Si no se encontró fecha, usar todo el comando como regla también
+        if not comando_regla:
+            comando_regla = comando_completo
         
     prioridad = 'Normal' 
     estado = 'Sin empezar' 
