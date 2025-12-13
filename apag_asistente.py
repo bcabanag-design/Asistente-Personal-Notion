@@ -133,6 +133,15 @@ def process_command(comando_completo):
         # Remover del título
         tarea_titulo = tarea_titulo.replace(match_lista.group(0), '').strip()
 
+    # 2. Detección de Lista al FINAL ("perejil lista de mercado")
+    match_lista_suffix = re.search(r'(.+?)\s+(?:en|a|para)?\s*(?:la\s+)?lista\s+(?:de\s+|del\s+|para\s+)?([a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]+)$', tarea_titulo, re.IGNORECASE)
+    if match_lista_suffix and not lista:
+         potential_item = match_lista_suffix.group(1).strip()
+         potential_list = match_lista_suffix.group(2).strip().title()
+         # Validar que no sea un falso positivo muy largo?
+         lista = potential_list
+         tarea_titulo = potential_item
+
     
     # Logic to set timedelta object based on the extracted string
     if recordatorio_base == '1 día antes':
@@ -141,8 +150,8 @@ def process_command(comando_completo):
         regla_timedelta = timedelta(hours=1)
 
     # Limpieza final del título
-    # Remover conectores residuales al inicio
-    tarea_titulo = re.sub(r'^(poner\s+|agregar\s+|anotar\s+|avisar\s+|avisa\s+|avisame\s+|avísame\s+|recuerda\s+|recuérdame\s+|recuerdame\s+|que\s+|para\s+|tengo\s+que\s+)', '', tarea_titulo, flags=re.IGNORECASE)
+    # Remover conectores residuales al inicio y "agenda"
+    tarea_titulo = re.sub(r'^(agenda\s+que\s+|agenda\s+|poner\s+|agregar\s+|anotar\s+|avisar\s+|avisa\s+|avisame\s+|avísame\s+|recuerda\s+|recuérdame\s+|recuerdame\s+|que\s+|para\s+|tengo\s+que\s+)', '', tarea_titulo, flags=re.IGNORECASE)
     # Remover espacios múltiples
     tarea_titulo = re.sub(r'\s{2,}', ' ', tarea_titulo).strip()
 
@@ -162,6 +171,47 @@ def process_command(comando_completo):
         'RETURN_AS_TIMEZONE_AWARE': True,
         'TIMEZONE': TIMEZONE 
     }
+
+    # --- 3.0 EXTRAER HORA EXPLICITA DE RECORDATORIO ("avisarme a las X") ---
+    # Esto corre ANTES de que dateparser consuma el texto
+    explicit_reminder_dt = None
+    rem_regex = r'(?:hacerme\s+recordar|hacerme\s+acordar|recordar|avisar|aviso|avisarme|recuérdame)\s+(?:a\s+las?|a\s+la)\s+(\d{1,2}(?::\d{2})?)\s*(am|pm|de\s+la\s+mañana|de\s+la\s+tarde|de\s+la\s+noche)?'
+    match_rem = re.search(rem_regex, proceso_comando_regla if 'proceso_comando_regla' in locals() else tarea_titulo, re.IGNORECASE)
+    
+    # Nota: proceso_comando_regla no existe aquí, usamos comando_regla
+    # Pero comando_regla ya no tiene el titulo original si fue extraido por lista?
+    # Mejor usaremos 'comando_regla' que es lo que se pasa a dateparser
+    
+    match_rem = re.search(rem_regex, comando_regla, re.IGNORECASE)
+    if match_rem:
+        rem_hora_str = match_rem.group(1)
+        rem_periodo = match_rem.group(2) or ''
+        
+        # Parsear hora
+        if ':' in rem_hora_str:
+            rh_val, rm_val = map(int, rem_hora_str.split(':'))
+        else:
+            rh_val = int(rem_hora_str)
+            rm_val = 0
+            
+        # Ajuste AM/PM
+        rem_periodo = rem_periodo.lower().replace('.', '')
+        if 'pm' in rem_periodo or 'tarde' in rem_periodo or 'noche' in rem_periodo:
+            if rh_val < 12: rh_val += 12
+        elif 'am' in rem_periodo or 'mañana' in rem_periodo:
+             if rh_val == 12: rh_val = 0
+             
+        # Guardamos hora/min para aplicarlo después a la fecha encontrada
+        explicit_reminder_dt = {'hour': rh_val, 'minute': rm_val}
+        
+        # Limpiamos del comando para que no ensucie título
+        comando_regla = comando_regla.replace(match_rem.group(0), '').strip()
+        tarea_titulo = tarea_titulo.replace(match_rem.group(0), '').strip()
+
+
+    # --- PROTECCIÓN "DE LA MAÑANA" (Evita confusión con "mañana" = tomorrow) ---
+    # Reemplazamos "de la mañana" por "AM" temporalmente para el parser
+    comando_regla_safe = re.sub(r'de\s+la\s+mañana', 'AM', comando_regla, flags=re.IGNORECASE)
     
     # Primero intentamos detección personalizada para expresiones españolas no soportadas
     import pytz
@@ -260,7 +310,8 @@ def process_command(comando_completo):
         # Let's handle "media hora" explicitly if the above is clunky
         comando_regla = re.sub(r'media\s+hora', '30 minutos', comando_regla, flags=re.IGNORECASE)
         
-        fecha_encontrada = dateparser.parse(comando_regla, settings=settings)
+        # Usamos el safe string
+        fecha_encontrada = dateparser.parse(comando_regla_safe, settings=settings)
 
     # --- 3.1. EXTRACCIÓN DE HORA INDEPENDIENTE (Fix para "mañana ... a las 6 pm") ---
     # Regex para buscar "a las X [pm]", "a la 1 [pm]"
@@ -305,7 +356,19 @@ def process_command(comando_completo):
     
     if fecha_tarea_dt and regla_timedelta:
         fecha_recordatorio_dt = fecha_tarea_dt - regla_timedelta
-    elif fecha_tarea_dt:
+        
+    # Si hubo recordatorio explícito ("avisarme a las 6"), sobreescribe la hora del recordatorio
+    if explicit_reminder_dt and fecha_tarea_dt:
+        # Usamos la fecha de la tarea pero con la hora del recordatorio
+        fecha_recordatorio_dt = fecha_tarea_dt.replace(hour=explicit_reminder_dt['hour'], minute=explicit_reminder_dt['minute'], second=0, microsecond=0)
+        
+        # Si la hora de recordatorio es MAYOR que la hora de la tarea, podría ser el día anterior?
+        # Por ahora asumimos mismo día salvo que usuario diga lo contrario.
+        # Caso común: "Entrevista a las 10am, recordarme a las 6am" -> Mismo día.
+        # Caso raro: "Entrevista mañana a las 10am, recordarme hoy a las 8pm" -> parsear 'hoy' sería otro nivel.
+        # Asumimos que recordatorio es relativo a la fecha encontrada.
+        
+    elif fecha_tarea_dt and not fecha_recordatorio_dt:
         fecha_recordatorio_dt = fecha_tarea_dt
 
     # Aseguramos un título limpio
