@@ -121,7 +121,7 @@ def process_command(comando_completo):
     # Lista / Contexto (Supermercado, Viaje, etc.)
     lista = None
     # Regex para: "para la lista X", "en la lista X", "lista X"
-    match_lista = re.search(r'(?:para|en)\s+(?:la\s+)?lista\s+([a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]+)', tarea_titulo, re.IGNORECASE)
+    match_lista = re.search(r'(?:para|en|a)\s+(?:la\s+)?lista\s+(?:de\s+)?([a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]+)', tarea_titulo, re.IGNORECASE)
     if match_lista:
         lista = match_lista.group(1).title() # Capitalize "Supermercado"
         # Remover del título
@@ -136,7 +136,7 @@ def process_command(comando_completo):
 
     # Limpieza final del título
     # Remover conectores residuales al inicio
-    tarea_titulo = re.sub(r'^(avisar\s+|avisa\s+|avisame\s+|avísame\s+|recuerda\s+|recuérdame\s+|recuerdame\s+|que\s+|para\s+|tengo\s+que\s+)', '', tarea_titulo, flags=re.IGNORECASE)
+    tarea_titulo = re.sub(r'^(poner\s+|agregar\s+|anotar\s+|avisar\s+|avisa\s+|avisame\s+|avísame\s+|recuerda\s+|recuérdame\s+|recuerdame\s+|que\s+|para\s+|tengo\s+que\s+)', '', tarea_titulo, flags=re.IGNORECASE)
     # Remover espacios múltiples
     tarea_titulo = re.sub(r'\s{2,}', ' ', tarea_titulo).strip()
 
