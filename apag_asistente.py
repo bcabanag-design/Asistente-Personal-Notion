@@ -476,16 +476,142 @@ def process_command(comando_completo):
 
     return properties, meta_data
 
+# --- 2.5 AI PARSING LOGIC (SMART EXTRACTION) ---
+def ai_parse_task(text):
+    """
+    Usa Gemini para extraer estructuradamente: Título, Fechas, listas, etc.
+    Retorna un diccionario limpio o None si falla.
+    """
+    if not GOOGLE_API_KEY: return None
+
+    try:
+        model = genai.GenerativeModel('gemini-flash-latest')
+        
+        # Contexto temporal vital para fechas relativas
+        ahora = datetime.now()
+        hoy_str = ahora.strftime('%Y-%m-%d %H:%M:%S')
+        dia_semana = ahora.strftime('%A')
+        
+        prompt = f"""
+        Actúa como un parser de tareas inteligente. Tu objetivo es convertir lenguaje natural en JSON estructurado.
+        
+        CONTEXTO ACTUAL:
+        - Fecha/Hora actual: {hoy_str}
+        - Día de la semana: {dia_semana}
+        - Timezone: {TIMEZONE}
+        
+        INSTRUCCIONES:
+        1. Analiza el texto del usuario.
+        2. Extrae:
+           - "title": El qué (limpio de palabras como "agéndame", "recordarme", fechas).
+           - "date_iso": Fecha de ejecución en formato ISO 8601 (YYYY-MM-DDTHH:MM:SS) o null.
+           - "reminder_iso": Fecha de recordatorio explícita (si dice "avisarme a las X") o null.
+           - "list": Nombre de la lista (si dice "para la lista X" o "lista X") o null.
+           - "priority": "Alta", "Media", "Baja" (basado en palabras clave).
+        3. Si no hay fecha explícita, date_iso = null.
+        4. "reminder_iso" es SOLO si el usuario pide explícitamente una alerta distinta a la hora del evento (ej: "Cita a las 10, avisar a las 9").
+           Si no dice nada de avisar, reminder_iso = null.
+        
+        FORMATO RESPUESTA (SOLO JSON):
+        {{
+            "title": "Comprar leche",
+            "date_iso": "2025-10-20T10:00:00",
+            "reminder_iso": "2025-10-20T09:00:00",
+            "list": "Mercado",
+            "priority": "Media"
+        }}
+        
+        USUARIO: "{text}"
+        """
+        
+        response = model.generate_content(prompt)
+        raw_json = response.text.strip()
+        
+        # Limpieza simple por si la IA pone backticks
+        if "```json" in raw_json:
+            raw_json = raw_json.replace("```json", "").replace("```", "")
+        
+        data = json.loads(raw_json)
+        return data
+        
+    except Exception as e:
+        print(f"AI Parse Error: {e}")
+        return None
+
+def build_notion_payload_from_ai(ai_data):
+    """Convierte el output de la IA al formato payload de Notion."""
+    prio = ai_data.get("priority", "Media")
+    title = ai_data.get("title", "Tarea sin nombre")
+    date_iso = ai_data.get("date_iso")
+    rem_iso = ai_data.get("reminder_iso")
+    list_name = ai_data.get("list")
+    
+    # Construir Properties
+    props = {
+        "Nombre": {"title": [{"text": {"content": title}}]},
+        "Prioridad": {"select": {"name": prio}},
+        "Estado": {"status": {"name": "Sin empezar"}},
+        "Base del Registro": {"select": {"name": "Manual"}} # Marcamos como IA/Manual
+    }
+    
+    if list_name:
+        props["Lista"] = {"select": {"name": list_name}}
+        
+    if date_iso:
+        props["Fecha/Hora de Tarea"] = {"date": {"start": date_iso}}
+        
+        # Lógica de recordatorio
+        # Si la IA detectó recordatorio explícito, úsalo.
+        # Si no, usa la misma fecha de tarea (comportamiento default).
+        final_reminder = rem_iso if rem_iso else date_iso
+        props["Fecha de Recordatorio"] = {"date": {"start": final_reminder}}
+    
+    # Meta data para el scheduler (threading)
+    meta = {}
+    if date_iso:
+        # Calcular reminder_dt para el scheduler inmediato
+        # Necesitamos objeto datetime
+        try:
+             # dateparser es robusto para convertir ISO a obj
+             dt = dateparser.parse(final_reminder)
+             meta["reminder_dt"] = dt
+        except:
+            pass
+            
+    return props, meta
+
 def create_task_logic(comando):
     """
     Lógica central para crear tareas en Notion.
-    Retorna un diccionario con el resultado y un código de estado sugerido.
+    ESTRATEGIA: IA PRIMERO -> FALLBACK REGEX
     """
     if not comando:
         return {"error": "No se recibió el comando"}, 400
 
-    properties_payload, meta_data = process_command(comando)
+    print(f"DEBUG: Processing command: '{comando}'")
+    
+    # 1. INTENTO CON IA (Smart Parsing)
+    properties_payload = None
+    meta_data = {}
+    
+    try:
+        print("DEBUG: Attempting AI Parsing...")
+        ai_result = ai_parse_task(comando)
+        
+        if ai_result and ai_result.get("title"):
+            print(f"DEBUG: AI Success. Result: {ai_result}")
+            properties_payload, meta_data = build_notion_payload_from_ai(ai_result)
+        else:
+             print("DEBUG: AI returned empty or invalid result.")
+    except Exception as e:
+        print(f"DEBUG: AI Failed or Crashed: {e}")
+    
+    # 2. FALLBACK: SI LA IA FALLÓ, USAR REGEX ANTIGUO
+    if not properties_payload:
+        print("DEBUG: Falling back to LEGACY Regex Parsing...")
+        properties_payload, meta_data = process_command(comando)
 
+    # --- VALIDACIONES FINALES ---
     if properties_payload is None:
         return {"error": meta_data.get("error", "Error desconocido")}, 400
 
