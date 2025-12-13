@@ -9,6 +9,42 @@ from flask import Flask, request, jsonify
 # pìp install pytz
 import requests
 import threading
+import google.generativeai as genai
+
+# --- CONFIGURACIÓN DE FECHA/HORA ---
+TIMEZONE = 'America/Lima' 
+
+app = Flask(__name__)
+
+# --- CONFIGURACIÓN GOOGLE GEMINI ---
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+if GOOGLE_API_KEY:
+    genai.configure(api_key=GOOGLE_API_KEY)
+
+def consultar_ia(mensaje, contexto=""):
+    """
+    Usa Google Gemini Flash para responder a preguntas o conversaciones.
+    """
+    if not GOOGLE_API_KEY:
+        return "⚠️ No tengo activado mi cerebro de IA (Falta API Key)."
+    
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        system_prompt = f"""
+        Eres un asistente personal útil y amigable. Tu dueño se llama Bernardo.
+        Responde de forma concisa y directa. SIEMPRE en español.
+        
+        Si te preguntan por fechas, hoy es: {datetime.now().strftime('%A %d de %B de %Y, hora %H:%M')}.
+        """
+        
+        full_prompt = f"{system_prompt}\n\nContexto adicional: {contexto}\n\nUsuario: {mensaje}"
+        
+        response = model.generate_content(full_prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"Error Gemini: {e}")
+        return "⚠️ Tuve un problema pensando la respuesta."
 import time
 
 # --- CONFIGURACIÓN DE NOTION ---
@@ -1341,23 +1377,37 @@ def telegram_webhook():
             except Exception as e:
                 msg_response = f"⚠️ Error consultando Agenda: {str(e)}"
 
-        # 3. CREAR TAREA (Default)
+        # 3. CREAR TAREA (Default) o CONSULTAR IA
         else:
-            # Asumimos que es un comando para crear tarea
-            # Llamamos al helper compartido
-            result, code = create_task_logic(text)
+            # Lógica Híbrida:
+            # Si parece una pregunta (Qué, Cómo, Cuándo...) O si el resultado de tarea es "vacío", usar IA.
             
-            if code == 200:
-                created_title = result.get("titulo_principal", "Tarea")
-                is_soon = result.get("smart_schedule", {}).get("is_soon", False)
-                msg_voz = result.get("smart_schedule", {}).get("msg", "")
-                
-                msg_response = f"✅ *Agendado*: {created_title}"
-                if is_soon:
-                    msg_response += f"\n\n🔔 {msg_voz}"
+            is_question = re.match(r'^(qué|que|cómo|como|cuándo|cuando|dónde|donde|por\s+qué|quién|quien|hola|buenos|buenas)\b', text, re.IGNORECASE)
+            
+            if is_question:
+                # Caso directo: Es charla
+                ai_reply = consultar_ia(text)
+                msg_response = ai_reply
             else:
-                 print(f"DEBUG: Create Task Failed. Result: {result}") # DEBUG
-                 msg_response = f"❌ Error creando tarea: {result.get('error', 'Desconocido')}"
+                # Intentamos crear tarea
+                result, code = create_task_logic(text)
+                
+                created_title = result.get("titulo_principal", "Tarea")
+                
+                # Fallback: Si se creó como "Tarea sin nombre" y el usuario dijo algo largo, probablemente la IA lo entienda mejor.
+                # O si el código dio error.
+                if code != 200 or created_title == "Tarea sin nombre":
+                     # Intento de rescate con IA
+                     print(f"DEBUG: Fallback to AI because task creation was weak. Title: {created_title}")
+                     ai_reply = consultar_ia(text, contexto="El usuario intentó un comando pero no logré entenderlo como tarea.")
+                     msg_response = ai_reply
+                else:
+                    is_soon = result.get("smart_schedule", {}).get("is_soon", False)
+                    msg_voz = result.get("smart_schedule", {}).get("msg", "")
+                    
+                    msg_response = f"✅ *Agendado*: {created_title}"
+                    if is_soon:
+                        msg_response += f"\n\n🔔 {msg_voz}"
 
         # ENVIAR RESPUESTA FINAL
         tg_url_send = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
