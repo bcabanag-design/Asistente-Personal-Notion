@@ -44,7 +44,7 @@ def process_command(comando_completo):
         r'((?:el\s+)?(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)(?:\s+a\s+las?\s+\d{1,2}(?:\s*(?:am|pm|de\s+la\s+(?:mañana|tarde|noche)))?)?)',
         r'(\d{1,2}\s+de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(?:\s+(?:de\s+)?\d{4})?(?:\s+a\s+las?\s+\d{1,2}(?:\s*(?:am|pm|de\s+la\s+(?:mañana|tarde|noche)))?)?)',
         r'(a\s+las?\s+\d{1,2}(?:\s*(?:am|pm|de\s+la\s+(?:mañana|tarde|noche)))?)',
-        r'(en\s+(?:\d+|un|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|media|med\w+)\s+(?:horas?|hr?s?|mins?|minutos?))',
+        r'(en\s+(?:\d+|un|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|media|med\w+)\s+(?:horas?|hr?s?|minutos?|mins?))',
     ]
 
     # Helper function to extract and remove matching patterns from text
@@ -190,7 +190,7 @@ def process_command(comando_completo):
 
     # --- NUEVO: CÁLCULO MANUAL PARA "EN X HORAS/MINUTOS" ---
     # Esto evita depender de dateparser que a veces falla con "en una hora"
-    elif comando_regla and (match := re.search(r'en\s+(.+?)\s+(horas?|hr?s?|mins?|minutos?)', comando_regla, re.IGNORECASE)):
+    elif comando_regla and (match := re.search(r'en\s+(.+?)\s+(horas?|hr?s?|minutos?|mins?)', comando_regla, re.IGNORECASE)):
         cantidad_txt = match.group(1).lower().strip()
         unidad = match.group(2).lower()
         
