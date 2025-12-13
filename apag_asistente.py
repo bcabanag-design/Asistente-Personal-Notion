@@ -1020,14 +1020,21 @@ def telegram_webhook():
         text = msg.get("text", "").strip()
         
         # --- DETECCIÓN DE RESPUESTA A SNOOZE (Reply) ---
-        reply_to = msg.get("reply_to_message")
-        if reply_to and "text" in reply_to:
-            reply_text = reply_to["text"]
-            # Buscar el ID oculto o el patrón de la pregunta
-            match_id = re.search(r'context/([a-zA-Z0-9\-]+)', reply_text) # Busca en el link invisible
+        if reply_to:
+            page_id = None
             
-            if match_id:
-                page_id = match_id.group(1)
+            # Estrategia 1: Buscar en entities (hidden link)
+            entities = reply_to.get("entities", [])
+            for ent in entities:
+                if ent.get("type") == "text_link":
+                    url = ent.get("url", "")
+                    if "context/" in url:
+                         match_id = re.search(r'context/([a-zA-Z0-9\-]+)', url)
+                         if match_id:
+                             page_id = match_id.group(1)
+                             break
+            
+            if page_id:
                 
                 # Calcular nueva fecha usando la lógica existente en process_command o simple dateparser
                 # Reutilizamos lógica de clean y dateparser de arriba
@@ -1046,7 +1053,8 @@ def telegram_webhook():
                 new_reminder_dt = None
                 
                 # Regex manual para "en X"
-                match_en = re.search(r'en\s+(.+?)\s+(horas?|hr?s?|minutos?|mins?)', text, re.IGNORECASE)
+                # Regex manual para "en X"
+                match_en = re.search(r'en\s+(.+?)\s+(horas?|hr?s?|minutos?|mins?|segundos?|segs?)', text, re.IGNORECASE)
                 if match_en:
                      val = match_en.group(1)
                      unit = match_en.group(2)
@@ -1057,6 +1065,7 @@ def telegram_webhook():
                         
                      if 'hora' in unit: new_reminder_dt = now + timedelta(hours=cant)
                      elif 'min' in unit: new_reminder_dt = now + timedelta(minutes=cant)
+                     elif 'seg' in unit: new_reminder_dt = now + timedelta(seconds=cant)
                 
                 # Si no match manual, dateparser
                 if not new_reminder_dt:
@@ -1101,6 +1110,35 @@ def telegram_webhook():
                             "chat_id": chat_id, "text": "⚠️ No entendí la fecha. Intenta de nuevo (ej: 'en 30 min')."
                         })
                 
+
+                # --- THREADING FOR SNOOZE (Immediate) ---
+                # Check directly if it's soon (< 1h)
+                if new_reminder_dt:
+                    diff_snooze = (new_reminder_dt - now).total_seconds()
+                    if 0 < diff_snooze < 3600:
+                         try:
+                            # Re-fetch title/priority not easy without query.
+                            # Just use generic info or assume it's same.
+                            # For better UX, we could pass title in hidden link too? No, too long.
+                            # Query Notion to start thread with correct info
+                            # OR: Just send generic "Recordatorio Pospuesto"
+                            
+                            # Simple Query to get Title/Priority
+                            u_page = f"https://api.notion.com/v1/pages/{page_id}"
+                            r_page = requests.get(u_page, headers=headers) # Headers defined above in update
+                            if r_page.status_code == 200:
+                                p_data = r_page.json()
+                                p_props = p_data.get("properties", {})
+                                p_title = p_props.get("Nombre", {}).get("title", [])
+                                title_real = p_title[0].get("text", {}).get("content", "Tarea") if p_title else "Tarea"
+                                p_rio = p_props.get("Prioridad", {}).get("select", {}).get("name", "Normal")
+                                
+                                timer = threading.Timer(diff_snooze, send_reminder_now, args=[title_real, p_rio, page_id])
+                                timer.start()
+                                print(f"Thread started for snooze: {diff_snooze}s")
+                         except Exception as ex:
+                             print(f"Error starting snooze thread: {ex}")
+
                 return "OK", 200 # Stop processing here
 
         lista_nombre = None
