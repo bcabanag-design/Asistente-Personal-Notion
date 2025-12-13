@@ -29,7 +29,8 @@ def consultar_ia(mensaje, contexto=""):
         return "⚠️ No tengo activado mi cerebro de IA (Falta API Key)."
     
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # Usamos 'gemini-flash-latest' que aparece como disponible en la cuenta del usuario
+        model = genai.GenerativeModel('gemini-flash-latest')
         
         system_prompt = f"""
         Eres un asistente personal útil y amigable. Tu dueño se llama Bernardo.
