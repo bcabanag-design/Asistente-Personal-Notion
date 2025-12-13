@@ -380,6 +380,35 @@ def agendar_tarea():
         if not properties_payload:
             return jsonify({"error": "No se pudo procesar el comando o no se extrajo información útil"}), 400
 
+        # DETECCIÓN DE MÚLTIPLES ITEMS (SOLO SI HAY LISTA)
+        # Ef: "arroz, atún y huevos" -> ["arroz", "atún", "huevos"]
+        items_a_guardar = []
+        is_multilist = False
+        
+        # Validar si tiene Lista y si el título parece ser una lista de cosas
+        if "Lista" in properties_payload:
+            original_title = properties_payload["Nombre"]["title"][0]["text"]["content"]
+            
+            # Separar por comas, " y ", " e "
+            import re
+            # Regex: coma, " y ", " e " (con espacios alrededor)
+            split_items = re.split(r',\s*|\s+(?:y|e)\s+', original_title)
+            split_items = [i.strip() for i in split_items if i.strip()]
+            
+            if len(split_items) > 1:
+                is_multilist = True
+                for item in split_items:
+                    # Crear una copia de las propiedades base
+                    import copy
+                    new_props = copy.deepcopy(properties_payload)
+                    # Actualizar el título
+                    new_props["Nombre"]["title"][0]["text"]["content"] = item.capitalize()
+                    items_a_guardar.append(new_props)
+            else:
+                items_a_guardar.append(properties_payload)
+        else:
+            items_a_guardar.append(properties_payload)
+
         import requests
         
         url = "https://api.notion.com/v1/pages"
@@ -389,16 +418,21 @@ def agendar_tarea():
             "Notion-Version": "2022-06-28" 
         }
         
-        payload = {
-            "parent": {"database_id": DATABASE_ID},
-            "properties": properties_payload
-        }
+        created_count = 0
+        for props in items_a_guardar:
+            payload = {
+                "parent": {"database_id": DATABASE_ID},
+                "properties": props
+            }
+            
+            response = requests.post(url, headers=headers, json=payload)
+            if response.status_code == 200:
+                created_count += 1
         
-        response = requests.post(url, headers=headers, json=payload)
-        
-        # Notion devuelve 200 para creación exitosa
-        if response.status_code == 200:
-            result_json = {"mensaje": "Tarea agendada con éxito", "data": properties_payload}
+        # Si se crearon todos (o el único)
+        if created_count > 0:
+            msg_exito = f"{created_count} tareas agendadas" if is_multilist else "Tarea agendada con éxito"
+            result_json = {"mensaje": msg_exito, "data": properties_payload}
             
             # --- SMART SCHEDULING LOGIC ---
             # Si el recordatorio es pronto (menos de 65 mins), le decimos a Tasker que espere
