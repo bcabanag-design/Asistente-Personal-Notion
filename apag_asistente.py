@@ -877,8 +877,15 @@ def telegram_webhook():
                 import dateparser
                 settings = {'PREFER_DATES_FROM': 'future', 'TIMEZONE': TIMEZONE, 'RETURN_AS_TIMEZONE_AWARE': True}
                 
-                # Limpiar keywords para no confundir a dateparser, pero conservando fechas
-                clean_text = re.sub(r'(agenda|que\s+tengo|qué\s+tengo|actividades|pendientes|calendario)', '', text, flags=re.IGNORECASE).strip()
+                # Limpiar keywords para no confundir a dateparser
+                # 1. Remover las palabras clave de detección
+                clean_text = re.sub(r'(agenda|que\s+tengo|qué\s+tengo|actividades|pendientes|calendario)', '', text, flags=re.IGNORECASE)
+                
+                # 2. Remover prefijos conversacionales (pásame, dime, las, mis)
+                clean_text = re.sub(r'^(p[áa]same|dime|dame|mu[ée]strame|ver|consultar)\s*', '', clean_text, flags=re.IGNORECASE)
+                clean_text = re.sub(r'\b(las|mis|los|el|la|de|del|para)\b', ' ', clean_text, flags=re.IGNORECASE)
+                
+                clean_text = clean_text.strip()
                 if not clean_text: clean_text = "hoy"
                 
                 try:
