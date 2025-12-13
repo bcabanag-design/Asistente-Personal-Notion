@@ -864,7 +864,7 @@ def telegram_webhook():
         # Opción 2: "Ver lista X"
         if not lista_nombre:
             import re
-            match_lista = re.search(r'(?:dame|ver|consultar|mostrar|tengo)?\s*(?:la\s+)?lista\s+(?:de\s+|del\s+|para\s+el\s+|para\s+la\s+|para\s+)?(.+)', text, re.IGNORECASE)
+            match_lista = re.search(r'^\s*(?:dame|ver|consultar|mostrar|tengo)?\s*(?:la\s+)?lista\s+(?:de\s+|del\s+|para\s+el\s+|para\s+la\s+|para\s+)?(.+)', text, re.IGNORECASE)
             if match_lista and "lista" in text.lower():
                  lista_nombre = match_lista.group(1).strip().title()
 
