@@ -187,9 +187,35 @@ def process_command(comando_completo):
                 if hora < 12:
                     hora += 12
             fecha_encontrada = fecha_encontrada.replace(hour=hora, minute=0, second=0, microsecond=0)
+
+    # --- NUEVO: CÁLCULO MANUAL PARA "EN X HORAS/MINUTOS" ---
+    # Esto evita depender de dateparser que a veces falla con "en una hora"
+    elif comando_regla and (match := re.search(r'en\s+(.+?)\s+(horas?|hr?s?|mins?|minutos?)', comando_regla, re.IGNORECASE)):
+        cantidad_txt = match.group(1).lower().strip()
+        unidad = match.group(2).lower()
+        
+        # Normalizar cantidad
+        num_map = {
+            'un': 1, 'una': 1, 'dos': 2, 'tres': 3, 'cuatro': 4,
+            'cinco': 5, 'seis': 6, 'siete': 7, 'ocho': 8, 'nueve': 9, 'diez': 10,
+            'media': 0.5
+        }
+        
+        cantidad = 0
+        if cantidad_txt.isdigit():
+            cantidad = float(cantidad_txt)
+        else:
+            cantidad = num_map.get(cantidad_txt, 0)
+            
+        if cantidad > 0:
+            if 'hora' in unidad or 'hr' in unidad:
+                fecha_encontrada = hoy + timedelta(hours=cantidad)
+            elif 'min' in unidad:
+                fecha_encontrada = hoy + timedelta(minutes=cantidad)
     
     # Si no hubo detección personalizada, usar dateparser
     if not fecha_encontrada and comando_regla:
+        # (Mantener normalización por si acaso entra aquí por otra ruta)
         # --- NORMALIZACIÓN DE NÚMEROS EN TEXTO (Fix para "en dos horas") ---
         # Map simple Spanish numbers to digits
         num_map = {
