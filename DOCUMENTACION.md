@@ -68,6 +68,27 @@ Cuando recibes un recordatorio, el bot envía un botón de **"Posponer"**.
 
 ---
 
+## 📱 Integración con Tasker (Android)
+
+Sí, el proyecto está diseñado para recibir comandos desde **Tasker** u otras herramientas de automatización.
+
+### Endpoint: `/agendar`
+Se utiliza para enviar comandos de texto directamente al cerebro del asistente sin usar Telegram.
+
+*   **URL**: `https://<tu-app-en-render>.onrender.com/agendar`
+*   **Método**: `POST`
+*   **Headers**: `Content-Type: application/json`
+*   **Body (JSON)**:
+    ```json
+    {
+      "comando": "Recordarme comprar pan mañana a las 8am"
+    }
+    ```
+
+Esto permite crear tareas desde accesos directos en el celular, widgets, o rutinas de voz de Android que envíen este HTTP Request.
+
+---
+
 ## 📦 Despliegue y Actualización
 
 El proyecto está alojado en **Render** conectado a un repositorio **GitHub**.
