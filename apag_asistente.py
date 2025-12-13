@@ -125,7 +125,7 @@ def process_command(comando_completo):
 
     # Limpieza final del título
     # Remover conectores residuales al inicio
-    tarea_titulo = re.sub(r'^(avisame\s+|avísame\s+|recuérdame\s+|recuerdame\s+|que\s+|para\s+|tengo\s+que\s+)', '', tarea_titulo, flags=re.IGNORECASE)
+    tarea_titulo = re.sub(r'^(avisar\s+|avisa\s+|avisame\s+|avísame\s+|recuerda\s+|recuérdame\s+|recuerdame\s+|que\s+|para\s+|tengo\s+que\s+)', '', tarea_titulo, flags=re.IGNORECASE)
     # Remover espacios múltiples
     tarea_titulo = re.sub(r'\s{2,}', ' ', tarea_titulo).strip()
 
