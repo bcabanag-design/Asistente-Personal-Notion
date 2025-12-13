@@ -378,7 +378,7 @@ def create_task_logic(comando):
     
     if "Lista" in properties_payload:
         original_title = properties_payload["Nombre"]["title"][0]["text"]["content"]
-        import re
+        # import re removed
         split_items = re.split(r',\s*|\s+(?:y|e)\s+', original_title)
         split_items = [i.strip() for i in split_items if i.strip()]
         
@@ -631,10 +631,11 @@ def check_reminders():
             # Guardar texto para voz
             tasks_text_list.append(f"Recordatorio: {title}")
             
-            # Teclado Inline (Botón)
+            # Teclado Inline (Botones: Listo y Posponer)
             reply_markup = {
                 "inline_keyboard": [[
-                    {"text": "✅ Hecho / Terminar", "callback_data": f"done_{page_id}"}
+                    {"text": "✅ Hecho / Terminar", "callback_data": f"done_{page_id}"},
+                    {"text": "⏱ Posponer", "callback_data": f"snooze_{page_id}"}
                 ]]
             }
 
@@ -651,6 +652,97 @@ def check_reminders():
             "count": tasks_sent,
             "status": "Messages sent" if tasks_sent > 0 else "No pending tasks",
             "voice_texts": tasks_text_list
+        }), 200
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+# --- ENDPOINT REPORT DIARIO (Cierre del día) ---
+@app.route("/daily_summary", methods=["GET", "POST"])
+def daily_summary():
+    if not NOTION_TOKEN or not DATABASE_ID:
+        return jsonify({"error": "Configuración incompleta"}), 500
+
+    import pytz
+    tz = pytz.timezone(TIMEZONE)
+    now = datetime.now(tz)
+    
+    # Rango: Todo el día de hoy
+    start_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_day = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    dia_str = now.strftime("%d/%m")
+
+    # Query Notion
+    url_query = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
+    headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
+    
+    query_payload = {
+        "filter": {
+            "and": [
+                {
+                    "property": "Fecha de Recordatorio",
+                    "date": {"on_or_after": start_day.isoformat()}
+                },
+                {
+                    "property": "Fecha de Recordatorio",
+                    "date": {"on_or_before": end_day.isoformat()}
+                }
+            ]
+        },
+        "sorts": [{"property": "Estado", "direction": "ascending"}]
+    }
+    
+    try:
+        data = requests.post(url_query, headers=headers, json=query_payload).json()
+        results = data.get("results", [])
+        
+        liquidadas = []
+        pendientes = []
+        
+        for res in results:
+            props = res.get("properties", {})
+            # Título
+            t = props.get("Nombre", {}).get("title", [])
+            titulo = t[0].get("text", {}).get("content", "Sin título") if t else "Sin título"
+            
+            # Estado
+            status = props.get("Estado", {}).get("status", {}).get("name", "Sin empezar")
+            
+            if status == "Listo":
+                liquidadas.append(titulo)
+            else:
+                pendientes.append(titulo)
+                
+        # Construir Mensaje
+        msg = f"🌙 *Cierre del Día ({dia_str})*\n\n"
+        
+        if liquidadas:
+            msg += "✅ *Liquidadas:*\n"
+            for t in liquidadas: msg += f"▪️ ~{t}~\n"
+        else:
+            msg += "✅ *Liquidadas:* 0 (¡A ponerse las pilas!)\n"
+            
+        msg += "\n"
+        
+        if pendientes:
+            msg += "🚨 *Pendientes (¡Atención!):*\n"
+            for t in pendientes: msg += f"▪️ {t}\n"
+            msg += "\n_Recuerda: Líquidalas o Pospónlas para mañana._"
+        else:
+            msg += "✨ *¡Todo limpio! Buen trabajo hoy.*"
+            
+        # Enviar
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": msg,
+            "parse_mode": "Markdown"
+        })
+        
+        return jsonify({
+            "status": "Report sent",
+            "liquidadas": len(liquidadas),
+            "pendientes": len(pendientes)
         }), 200
 
     except Exception as e:
@@ -706,6 +798,34 @@ def telegram_webhook():
                 })
             else:
                 requests.post(tg_url_answer, json={"callback_id": callback_id, "text": "Error actualizando Notion 😢"})
+
+        elif data.startswith("snooze_"):
+            page_id = data.split("snooze_")[1]
+            
+            # Responder al callback para quitar el estado de carga
+            tg_url_answer = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
+            requests.post(tg_url_answer, json={"callback_id": callback_id, "text": "Ok, ¿para cuándo?"})
+            
+            # Enviar mensaje preguntando nuevo tiempo (ForceReply)
+            # Incluimos el page_id en el texto de forma invisible/sutil para recuperarlo luego
+            # Usamos Markdown con link invisible zero-width o al final
+            # Estrategia simple: Texto al final
+            msg_text = f"⏳ ¿En cuánto tiempo (o a qué hora) quieres que te recuerde esta tarea?\n\n_(Responde a este mensaje. Ej: 30 min, 1 hora, mañana a las 9)_"
+            # Hack: Ocultamos el ID en una URL markdown que no se ve
+            # O simplemente lo ponemos explicito pero pequeño.
+            # Vamos a usar texto invisible : [ ](http://id_context/ID)
+            msg_text += f"[\u200b](http://context/{page_id})"
+
+            tg_payload = {
+                "chat_id": chat_id,
+                "text": msg_text,
+                "parse_mode": "Markdown",
+                "reply_markup": {
+                    "force_reply": True,
+                    "input_field_placeholder": "Ej: 15 minutos, mañana..."
+                }
+            }
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json=tg_payload)
 
     # 2. Manejo de MENSAJES de texto (Para consultar listas)
     # 1.5. Manejo de MENSAJES DE VOZ (Google Speech Recognition - FREE)
@@ -769,8 +889,8 @@ def telegram_webhook():
             # --- COPIA LÓGICA DE TEXTO (DRY pendiente) ---
             
             # A. AGENDA
-            import re
-            import dateparser
+            # import re removed
+            # import dateparser removed
             agenda_date = None
             if re.search(r'(agenda|que\s+tengo|qué\s+tengo|actividades|pendientes|calendario)', text, re.IGNORECASE):
                  clean_text = re.sub(r'(agenda|que\s+tengo|qué\s+tengo|actividades|pendientes|calendario)', '', text, flags=re.IGNORECASE).strip()
@@ -853,6 +973,90 @@ def telegram_webhook():
         chat_id = msg.get("chat", {}).get("id")
         text = msg.get("text", "").strip()
         
+        # --- DETECCIÓN DE RESPUESTA A SNOOZE (Reply) ---
+        reply_to = msg.get("reply_to_message")
+        if reply_to and "text" in reply_to:
+            reply_text = reply_to["text"]
+            # Buscar el ID oculto o el patrón de la pregunta
+            match_id = re.search(r'context/([a-zA-Z0-9\-]+)', reply_text) # Busca en el link invisible
+            
+            if match_id:
+                page_id = match_id.group(1)
+                
+                # Calcular nueva fecha usando la lógica existente en process_command o simple dateparser
+                # Reutilizamos lógica de clean y dateparser de arriba
+                # import dateparser removed
+                from datetime import datetime, timedelta
+                
+                # Usamos el texto del usuario como input de tiempo
+                # settings = {'PREFER_DATES_FROM': 'future', 'TIMEZONE': TIMEZONE, 'RETURN_AS_TIMEZONE_AWARE': True}
+                # Simplificado: Usamos process_command auxiliar o logica directa
+                # Como process_command extrae de todo, a veces es too much. Mejor dateparser limpio + hacks de "en X minutos"
+                
+                # --- HACK RAPIDO "EN X MINUTOS" (Copied from process_command) ---
+                import pytz
+                tz = pytz.timezone(TIMEZONE)
+                now = datetime.now(tz)
+                new_reminder_dt = None
+                
+                # Regex manual para "en X"
+                match_en = re.search(r'en\s+(.+?)\s+(horas?|hr?s?|minutos?|mins?)', text, re.IGNORECASE)
+                if match_en:
+                     val = match_en.group(1)
+                     unit = match_en.group(2)
+                     try:
+                        cant = float(val)
+                     except:
+                        cant = 1 # fallback simple
+                        
+                     if 'hora' in unit: new_reminder_dt = now + timedelta(hours=cant)
+                     elif 'min' in unit: new_reminder_dt = now + timedelta(minutes=cant)
+                
+                # Si no match manual, dateparser
+                if not new_reminder_dt:
+                    new_reminder_dt = dateparser.parse(text, settings={'PREFER_DATES_FROM': 'future', 'TIMEZONE': TIMEZONE, 'RETURN_AS_TIMEZONE_AWARE': True})
+
+                if new_reminder_dt:
+                    # Garantizar timezone
+                    if new_reminder_dt.tzinfo is None:
+                        new_reminder_dt = tz.localize(new_reminder_dt)
+                        
+                    # ACTUALIZAR NOTION
+                    url_patch = f"https://api.notion.com/v1/pages/{page_id}"
+                    headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
+                    
+                    # Formato ISO
+                    iso_date = format_date_to_iso(new_reminder_dt)
+                    
+                    payload = {
+                        "properties": {
+                            "Fecha de Recordatorio": {
+                                "date": {"start": iso_date}
+                            },
+                             # Opcional: Cambiar estado a "Sin empezar" si estaba en otro (para asegurar que vuelva a salir)
+                             # Pero mejor no tocar estado si no se pide.
+                        }
+                    }
+                    
+                    r_patch = requests.patch(url_patch, headers=headers, json=payload)
+                    
+                    if r_patch.status_code == 200:
+                        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
+                            "chat_id": chat_id,
+                            "text": f"✅ Pospuesto para: *{new_reminder_dt.strftime('%d/%m %I:%M %p')}*",
+                            "parse_mode": "Markdown"
+                        })
+                    else:
+                         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
+                            "chat_id": chat_id, "text": f"⚠️ Error Notion: {r_patch.text}"
+                        })
+                else:
+                    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
+                            "chat_id": chat_id, "text": "⚠️ No entendí la fecha. Intenta de nuevo (ej: 'en 30 min')."
+                        })
+                
+                return "OK", 200 # Stop processing here
+
         lista_nombre = None
         agenda_date = None
         
@@ -863,7 +1067,7 @@ def telegram_webhook():
         
         # Opción 2: "Ver lista X"
         if not lista_nombre:
-            import re
+            # import re removed
             match_lista = re.search(r'^\s*(?:dame|ver|consultar|mostrar|tengo)?\s*(?:la\s+)?lista\s+(?:de\s+|del\s+|para\s+el\s+|para\s+la\s+|para\s+)?(.+)', text, re.IGNORECASE)
             if match_lista and "lista" in text.lower():
                  lista_nombre = match_lista.group(1).strip().title()
@@ -874,7 +1078,7 @@ def telegram_webhook():
             if re.search(r'(agenda|que\s+tengo|qué\s+tengo|actividades|pendientes|calendario)', text, re.IGNORECASE):
                 # Intentar extraer fecha del texto (Ej: "Agenda mañana")
                 # Si no hay fecha explícita, asumimos "hoy" si dice "que tengo"
-                import dateparser
+                # import dateparser removed
                 settings = {'PREFER_DATES_FROM': 'future', 'TIMEZONE': TIMEZONE, 'RETURN_AS_TIMEZONE_AWARE': True}
                 
                 # Limpiar keywords para no confundir a dateparser
