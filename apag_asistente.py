@@ -358,6 +358,110 @@ def process_command(comando_completo):
 
     return properties, meta_data
 
+def create_task_logic(comando):
+    """
+    Lógica central para crear tareas en Notion.
+    Retorna un diccionario con el resultado y un código de estado sugerido.
+    """
+    if not comando:
+        return {"error": "No se recibió el comando"}, 400
+
+    properties_payload, meta_data = process_command(comando)
+
+    if not properties_payload:
+        return {"error": "No se pudo procesar el comando"}, 400
+
+    # DETECCIÓN DE MÚLTIPLES ITEMS (SOLO SI HAY LISTA)
+    items_a_guardar = []
+    is_multilist = False
+    
+    if "Lista" in properties_payload:
+        original_title = properties_payload["Nombre"]["title"][0]["text"]["content"]
+        import re
+        split_items = re.split(r',\s*|\s+(?:y|e)\s+', original_title)
+        split_items = [i.strip() for i in split_items if i.strip()]
+        
+        if len(split_items) > 1:
+            is_multilist = True
+            for item in split_items:
+                import copy
+                new_props = copy.deepcopy(properties_payload)
+                new_props["Nombre"]["title"][0]["text"]["content"] = item.capitalize()
+                items_a_guardar.append(new_props)
+        else:
+            items_a_guardar.append(properties_payload)
+    else:
+        items_a_guardar.append(properties_payload)
+
+    import requests
+    url = "https://api.notion.com/v1/pages"
+    headers = {
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28" 
+    }
+    
+    created_count = 0
+    last_response = None
+    
+    for props in items_a_guardar:
+        payload = {
+            "parent": {"database_id": DATABASE_ID},
+            "properties": props
+        }
+        last_response = requests.post(url, headers=headers, json=payload)
+        if last_response.status_code == 200:
+            created_count += 1
+    
+    if created_count > 0:
+        msg_exito = f"{created_count} tareas agendadas" if is_multilist else "Tarea agendada con éxito"
+        result_json = {
+            "mensaje": msg_exito, 
+            "data": properties_payload,
+            "titulo_principal": items_a_guardar[0]["Nombre"]["title"][0]["text"]["content"] # Útil para feedback
+        }
+        
+        # --- SMART SCHEDULING LOGIC ---
+        reminder_dt = meta_data.get("reminder_dt")
+        if reminder_dt:
+            import pytz
+            tz = pytz.timezone(TIMEZONE)
+            now = datetime.now(tz)
+            if reminder_dt.tzinfo is None:
+                reminder_dt = tz.localize(reminder_dt)
+            
+            diff = (reminder_dt - now).total_seconds()
+            
+            if 0 < diff < 3900:
+                diff_int = int(diff)
+                if diff_int >= 60:
+                    minutos = diff_int // 60
+                    seg_rest = diff_int % 60
+                    if seg_rest > 30: minutos += 1
+                    msg_voz = f"Listo. Te aviso en {minutos} minutos."
+                else:
+                    msg_voz = f"Listo. Te aviso en {diff_int} segundos."
+
+                result_json["smart_schedule"] = {
+                    "wait_seconds": diff_int,
+                    "is_soon": True,
+                    "msg": msg_voz
+                }
+        
+        return result_json, 200
+    else:
+        # Error (usamos la última respuesta para info)
+        try:
+            notion_error = last_response.json()
+        except:
+            notion_error = {"raw_text": last_response.text if last_response else "No requests made"}
+        
+        return {
+            "error": "Error al insertar en Notion",
+            "notion_response": notion_error
+        }, last_response.status_code if last_response else 500
+
+
 # --- ENDPOINT QUE ENVÍA A NOTION (EL ORIGINAL) ---
 @app.route("/agendar", methods=["POST"])
 def agendar_tarea():
@@ -372,114 +476,9 @@ def agendar_tarea():
         data = request.get_json()
         comando = data.get('comando', '')
         
-        if not comando:
-            return jsonify({"error": "No se recibió el comando"}), 400
-
-        properties_payload, meta_data = process_command(comando)
-
-        if not properties_payload:
-            return jsonify({"error": "No se pudo procesar el comando o no se extrajo información útil"}), 400
-
-        # DETECCIÓN DE MÚLTIPLES ITEMS (SOLO SI HAY LISTA)
-        # Ef: "arroz, atún y huevos" -> ["arroz", "atún", "huevos"]
-        items_a_guardar = []
-        is_multilist = False
-        
-        # Validar si tiene Lista y si el título parece ser una lista de cosas
-        if "Lista" in properties_payload:
-            original_title = properties_payload["Nombre"]["title"][0]["text"]["content"]
-            
-            # Separar por comas, " y ", " e "
-            import re
-            # Regex: coma, " y ", " e " (con espacios alrededor)
-            split_items = re.split(r',\s*|\s+(?:y|e)\s+', original_title)
-            split_items = [i.strip() for i in split_items if i.strip()]
-            
-            if len(split_items) > 1:
-                is_multilist = True
-                for item in split_items:
-                    # Crear una copia de las propiedades base
-                    import copy
-                    new_props = copy.deepcopy(properties_payload)
-                    # Actualizar el título
-                    new_props["Nombre"]["title"][0]["text"]["content"] = item.capitalize()
-                    items_a_guardar.append(new_props)
-            else:
-                items_a_guardar.append(properties_payload)
-        else:
-            items_a_guardar.append(properties_payload)
-
-        import requests
-        
-        url = "https://api.notion.com/v1/pages"
-        headers = {
-            "Authorization": f"Bearer {NOTION_TOKEN}",
-            "Content-Type": "application/json",
-            "Notion-Version": "2022-06-28" 
-        }
-        
-        created_count = 0
-        for props in items_a_guardar:
-            payload = {
-                "parent": {"database_id": DATABASE_ID},
-                "properties": props
-            }
-            
-            response = requests.post(url, headers=headers, json=payload)
-            if response.status_code == 200:
-                created_count += 1
-        
-        # Si se crearon todos (o el único)
-        if created_count > 0:
-            msg_exito = f"{created_count} tareas agendadas" if is_multilist else "Tarea agendada con éxito"
-            result_json = {"mensaje": msg_exito, "data": properties_payload}
-            
-            # --- SMART SCHEDULING LOGIC ---
-            # Si el recordatorio es pronto (menos de 65 mins), le decimos a Tasker que espere
-            reminder_dt = meta_data.get("reminder_dt")
-            if reminder_dt:
-                import pytz
-                tz = pytz.timezone(TIMEZONE)
-                now = datetime.now(tz)
-                
-                # Asegurar que ambos sean comparables (aware)
-                if reminder_dt.tzinfo is None:
-                    reminder_dt = tz.localize(reminder_dt)
-                
-                diff = (reminder_dt - now).total_seconds()
-                
-                # Si falta entre 1 segundo y 65 minutos (3900 segs)
-                if 0 < diff < 3900:
-                    diff_int = int(diff)
-                    if diff_int >= 60:
-                        minutos = diff_int // 60
-                        seg_rest = diff_int % 60
-                        # Round up if close
-                        if seg_rest > 30: minutos += 1
-                        msg_voz = f"Listo. Te aviso en {minutos} minutos."
-                    else:
-                        msg_voz = f"Listo. Te aviso en {diff_int} segundos."
-
-                    result_json["smart_schedule"] = {
-                        "wait_seconds": diff_int,
-                        "is_soon": True,
-                        "msg": msg_voz
-                    }
-            
-            return jsonify(result_json), 200
-        else:
-            # Intentar obtener el JSON de error de Notion
-            try:
-                notion_error = response.json()
-            except:
-                notion_error = {"raw_text": response.text}
-            
-            return jsonify({
-                "error": "Error al insertar en Notion",
-                "status_code": response.status_code,
-                "notion_response": notion_error,
-                "payload_sent": properties_payload 
-            }), response.status_code
+        # Delegar lógica central
+        result, status_code = create_task_logic(comando)
+        return jsonify(result), status_code
 
     except Exception as e:
         import traceback
@@ -711,83 +710,153 @@ def telegram_webhook():
                 requests.post(tg_url_answer, json={"callback_id": callback_id, "text": "Error actualizando Notion 😢"})
 
     # 2. Manejo de MENSAJES de texto (Para consultar listas)
+    # 2. Manejo de MENSAJES de texto
     elif "message" in update:
         msg = update["message"]
         chat_id = msg.get("chat", {}).get("id")
-        text = msg.get("text", "").strip() # No lowercase yet, to preserve formatting if needed
+        text = msg.get("text", "").strip()
         
         lista_nombre = None
-
-        # Opción A: Atajo con "@" (Ej: "@Super")
+        agenda_date = None
+        
+        # --- A. DETECTAR LISTA ---
+        # Opción 1: Atajo con "@" (Ej: "@Super")
         if text.startswith("@"):
-            lista_nombre = text[1:].strip().title() # Quitar "@" y capitalizar
-
-        # Opción B: Comando verbal (Ej: "dame la lista del super")
+            lista_nombre = text[1:].strip().title()
+        
+        # Opción 2: "Ver lista X"
         if not lista_nombre:
             import re
-            # Regex flexible: "dame la lista del super", "ver lista compra", "lista viaje"
             match_lista = re.search(r'(?:dame|ver|consultar|mostrar|tengo)?\s*(?:la\s+)?lista\s+(?:de\s+|del\s+|para\s+el\s+|para\s+la\s+|para\s+)?(.+)', text, re.IGNORECASE)
-            if match_lista and "lista" in text.lower(): # Ensure "lista" keyword is present to avoid false positives if regex is too loose
+            if match_lista and "lista" in text.lower():
                  lista_nombre = match_lista.group(1).strip().title()
 
+        # --- B. DETECTAR AGENDA (Si no es lista) ---
+        if not lista_nombre:
+            # Palabras clave: Agenda, qué tengo, actividades, calendario
+            if re.search(r'(agenda|que\s+tengo|qué\s+tengo|actividades|pendientes|calendario)', text, re.IGNORECASE):
+                # Intentar extraer fecha del texto (Ej: "Agenda mañana")
+                # Si no hay fecha explícita, asumimos "hoy" si dice "que tengo"
+                import dateparser
+                settings = {'PREFER_DATES_FROM': 'future', 'TIMEZONE': TIMEZONE, 'RETURN_AS_TIMEZONE_AWARE': True}
+                
+                # Limpiar keywords para no confundir a dateparser, pero conservando fechas
+                clean_text = re.sub(r'(agenda|que\s+tengo|qué\s+tengo|actividades|pendientes|calendario)', '', text, flags=re.IGNORECASE).strip()
+                if not clean_text: clean_text = "hoy"
+                
+                try:
+                    agenda_date = dateparser.parse(clean_text, settings=settings)
+                    if agenda_date:
+                         # Si es "que tengo hoy", dateparser puede dar fecha+hora actual. Queremos todo el día.
+                         pass
+                except:
+                    pass
+
+        # --- EJECUCIÓN ---
+
+        # 1. CONSULTAR LISTA
         if lista_nombre:
-            # Consultar Notion
             url_query = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
-            headers = {
-                "Authorization": f"Bearer {NOTION_TOKEN}",
-                "Content-Type": "application/json",
-                "Notion-Version": "2022-06-28"
-            }
+            headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
+            query_payload = {"filter": {"and": [{"property": "Lista", "select": {"equals": lista_nombre}}, {"property": "Estado", "status": {"does_not_equal": "Listo"}}]}}
             
-            # Filtro: Property "Lista" == lista_nombre AND Estado != Listo
+            try:
+                data = requests.post(url_query, headers=headers, json=query_payload).json()
+                tasks = [r.get("properties", {}).get("Nombre", {}).get("title", [])[0].get("text", {}).get("content", "") for r in data.get("results", []) if r.get("properties", {}).get("Nombre", {}).get("title")]
+                
+                if tasks:
+                    msg_response = f"🛒 *Lista {lista_nombre}*: \n\n" + "\n".join([f"▫️ {t}" for t in tasks])
+                else:
+                    msg_response = f"🤷‍♂️ Nada en la lista *{lista_nombre}*."
+            except Exception as e:
+                msg_response = f"⚠️ Error Notion: {str(e)}"
+
+        # 2. CONSULTAR AGENDA
+        elif agenda_date:
+            # Rango: Desde inicio del día hasta fin del día
+            import pytz
+            tz = pytz.timezone(TIMEZONE)
+            if agenda_date.tzinfo is None: agenda_date = tz.localize(agenda_date)
+            
+            start_day = agenda_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_day = agenda_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            dia_str = start_day.strftime("%A %d/%m") # Ej: Lunes 13/12
+            
+            url_query = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
+            headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
+            
+            # Filtro: Fecha Recordatorio dentro del rango OR Fecha Tarea dentro del rango
+            # Simplificado: Usaremos Fecha Recordatorio para agenda diaria
             query_payload = {
                 "filter": {
                     "and": [
                         {
-                            "property": "Lista",
-                            "select": {
-                                "equals": lista_nombre
-                            }
+                            "property": "Fecha de Recordatorio",
+                            "date": {"on_or_after": start_day.isoformat()}
                         },
                         {
-                            "property": "Estado",
-                            "status": {
-                                "does_not_equal": "Listo"
-                            }
+                            "property": "Fecha de Recordatorio",
+                            "date": {"on_or_before": end_day.isoformat()}
                         }
                     ]
-                }
+                },
+                "sorts": [{"property": "Fecha de Recordatorio", "direction": "ascending"}]
             }
             
-            import requests
             try:
-                response = requests.post(url_query, headers=headers, json=query_payload)
-                data = response.json()
+                data = requests.post(url_query, headers=headers, json=query_payload).json()
+                results = data.get("results", [])
                 
-                tasks = []
-                for res in data.get("results", []):
-                    # Extraer título
-                    title_list = res.get("properties", {}).get("Nombre", {}).get("title", [])
-                    if title_list:
-                        tasks.append(title_list[0].get("text", {}).get("content", ""))
-                
-                if tasks:
-                    msg_response = f"🛒 *Lista {lista_nombre}*: \n\n"
-                    for t in tasks:
-                        msg_response += f"▫️ {t}\n"
+                if results:
+                    msg_response = f"📅 *Agenda para {dia_str}*:\n\n"
+                    for res in results:
+                        props = res.get("properties", {})
+                        title = props.get("Nombre", {}).get("title", [])
+                        title_text = title[0].get("text", {}).get("content", "Sin nombre") if title else "Sin nombre"
+                        
+                        # Hora
+                        date_prop = props.get("Fecha de Recordatorio", {}).get("date", {})
+                        start_date_str = date_prop.get("start")
+                        hora_txt = ""
+                        if start_date_str and "T" in start_date_str: # Tiene hora
+                             dt_obj = dateparser.parse(start_date_str)
+                             hora_txt = f"[{dt_obj.strftime('%I:%M %p')}] "
+                        
+                        status = props.get("Estado", {}).get("status", {}).get("name", "")
+                        check = "✅" if status == "Listo" else "⬜"
+                        
+                        msg_response += f"{check} {hora_txt}{title_text}\n"
                 else:
-                    msg_response = f"🤷‍♂️ No encontré nada pendiente en la lista *{lista_nombre}*."
-
+                    msg_response = f"📅 *Agenda para {dia_str}*:\n\nNada programado. ¡Día libre! 🎉"
+            
             except Exception as e:
-                msg_response = f"⚠️ Error consultando Notion: {str(e)}"
+                msg_response = f"⚠️ Error consultando Agenda: {str(e)}"
 
-            # Enviar respuesta a Telegram
-            tg_url_send = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            requests.post(tg_url_send, json={
-                "chat_id": chat_id,
-                "text": msg_response,
-                "parse_mode": "Markdown"
-            })
+        # 3. CREAR TAREA (Default)
+        else:
+            # Asumimos que es un comando para crear tarea
+            # Llamamos al helper compartido
+            result, code = create_task_logic(text)
+            
+            if code == 200:
+                created_title = result.get("titulo_principal", "Tarea")
+                is_soon = result.get("smart_schedule", {}).get("is_soon", False)
+                msg_voz = result.get("smart_schedule", {}).get("msg", "")
+                
+                msg_response = f"✅ *Agendado*: {created_title}"
+                if is_soon:
+                    msg_response += f"\n\n🔔 {msg_voz}"
+            else:
+                 msg_response = f"❌ Error creando tarea: {result.get('error', 'Desconocido')}"
+
+        # ENVIAR RESPUESTA FINAL
+        tg_url_send = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(tg_url_send, json={
+            "chat_id": chat_id,
+            "text": msg_response,
+            "parse_mode": "Markdown"
+        })
 
     return "OK", 200
 
