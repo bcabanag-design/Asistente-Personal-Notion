@@ -881,9 +881,9 @@ def telegram_webhook():
                 # 1. Remover las palabras clave de detección
                 clean_text = re.sub(r'(agenda|que\s+tengo|qué\s+tengo|actividades|pendientes|calendario)', '', text, flags=re.IGNORECASE)
                 
-                # 2. Remover prefijos conversacionales (pásame, dime, las, mis)
+                # 2. Remover prefijos conversacionales (pásame, dime, las, mis, toda la)
                 clean_text = re.sub(r'^(p[áa]same|dime|dame|mu[ée]strame|ver|consultar)\s*', '', clean_text, flags=re.IGNORECASE)
-                clean_text = re.sub(r'\b(las|mis|los|el|la|de|del|para)\b', ' ', clean_text, flags=re.IGNORECASE)
+                clean_text = re.sub(r'\b(las|mis|los|el|la|de|del|para|toda|todo|mi|tu)\b', ' ', clean_text, flags=re.IGNORECASE)
                 
                 clean_text = clean_text.strip()
                 if not clean_text: clean_text = "hoy"
