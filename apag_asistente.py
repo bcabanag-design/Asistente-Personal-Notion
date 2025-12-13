@@ -6,7 +6,8 @@ import dateparser
 from flask import Flask, request, jsonify
 
 # Nota: Asegúrate de que pytz esté instalado en requirements.txt
-# pip install pytz
+# pìp install pytz
+import requests
 
 # --- CONFIGURACIÓN DE NOTION ---
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
@@ -393,7 +394,6 @@ def create_task_logic(comando):
     else:
         items_a_guardar.append(properties_payload)
 
-    import requests
     url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -542,7 +542,6 @@ def check_reminders():
     if not NOTION_TOKEN or not DATABASE_ID:
         return jsonify({"error": "Configuración incompleta"}), 500
 
-    import requests
     import pytz
     
     # 1. Definir ventana de tiempo (Persistencia: Desde hoy temprano hasta 2 horas adelante)
@@ -689,7 +688,6 @@ def telegram_webhook():
                 }
             }
             
-            import requests
             res_notion = requests.patch(notion_url, headers=headers, json=payload)
             
             # 2. Responder a Telegram (Feedback visual)
@@ -724,8 +722,6 @@ def telegram_webhook():
         temp_wav = None
 
         try:
-            import requests
-            import os
             import speech_recognition as sr
             from pydub import AudioSegment
             import io
