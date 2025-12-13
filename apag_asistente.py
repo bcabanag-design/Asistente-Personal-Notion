@@ -178,11 +178,10 @@ def process_command(comando_completo):
     rem_regex = r'(?:hacerme\s+recordar|hacerme\s+acordar|recordar|avisar|aviso|avisarme|recuérdame)\s+(?:a\s+las?|a\s+la)\s+(\d{1,2}(?::\d{2})?)\s*(am|pm|de\s+la\s+mañana|de\s+la\s+tarde|de\s+la\s+noche)?'
     match_rem = re.search(rem_regex, proceso_comando_regla if 'proceso_comando_regla' in locals() else tarea_titulo, re.IGNORECASE)
     
-    # Nota: proceso_comando_regla no existe aquí, usamos comando_regla
-    # Pero comando_regla ya no tiene el titulo original si fue extraido por lista?
-    # Mejor usaremos 'comando_regla' que es lo que se pasa a dateparser
+    # Nota: proceso_comando_regla no existe aquí, usamos tarea_titulo que contiene el texto completo (salvo limpieza inicial)
+    # comando_regla puede tener solo la fecha detectada (ej: "el lunes")
     
-    match_rem = re.search(rem_regex, comando_regla, re.IGNORECASE)
+    match_rem = re.search(rem_regex, tarea_titulo, re.IGNORECASE)
     if match_rem:
         rem_hora_str = match_rem.group(1)
         rem_periodo = match_rem.group(2) or ''
@@ -205,8 +204,10 @@ def process_command(comando_completo):
         explicit_reminder_dt = {'hour': rh_val, 'minute': rm_val}
         
         # Limpiamos del comando para que no ensucie título
-        comando_regla = comando_regla.replace(match_rem.group(0), '').strip()
         tarea_titulo = tarea_titulo.replace(match_rem.group(0), '').strip()
+        # Y también de comando_regla por si acaso (si dateparser va a usarlo)
+        if comando_regla:
+            comando_regla = comando_regla.replace(match_rem.group(0), '').strip()
 
 
     # --- PROTECCIÓN "DE LA MAÑANA" (Evita confusión con "mañana" = tomorrow) ---
