@@ -145,8 +145,10 @@ def process_command(comando_completo):
     # --- GUARD: DETECT ACCIDENTAL TIME-ONLY MESSAGES ---
     # Si el usuario dice solo "10 minutos" o "20 segundos", probablemente quería responder a un mensaje y falló.
     # Evitamos crear tareas con ese nombre.
+    print(f"DEBUG: Checking guard for '{tarea_titulo}'") # DEBUG
     time_only_match = re.match(r'^(\d+(\.\d+)?)\s*(segundos?|segs?|minutos?|mins?|horas?|hrs?)$', tarea_titulo, re.IGNORECASE)
     if time_only_match:
+        print("DEBUG: Guard TRIGGERED") # DEBUG
         return {"error": "Parece que quieres posponer. Por favor, **responde (Reply)** al mensaje original del recordatorio."}, 400
 
     # --- 3. EXTRACCIÓN DE FECHAS ---
@@ -1032,6 +1034,8 @@ def telegram_webhook():
             
             # Estrategia 1: Buscar en entities (hidden link)
             entities = reply_to.get("entities", [])
+            print(f"DEBUG: Reply entities: {entities}") # DEBUG
+            
             for ent in entities:
                 if ent.get("type") == "text_link":
                     url = ent.get("url", "")
@@ -1307,6 +1311,7 @@ def telegram_webhook():
                 if is_soon:
                     msg_response += f"\n\n🔔 {msg_voz}"
             else:
+                 print(f"DEBUG: Create Task Failed. Result: {result}") # DEBUG
                  msg_response = f"❌ Error creando tarea: {result.get('error', 'Desconocido')}"
 
         # ENVIAR RESPUESTA FINAL
