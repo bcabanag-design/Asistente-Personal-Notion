@@ -1153,7 +1153,7 @@ def telegram_webhook():
             return "OK", 200
 
         # --- A. DETECTAR LISTA ---
-
+        lista_nombre = None
         agenda_date = None
         
         # --- A. DETECTAR LISTA ---
