@@ -8,6 +8,8 @@ from flask import Flask, request, jsonify
 # Nota: Asegúrate de que pytz esté instalado en requirements.txt
 # pìp install pytz
 import requests
+import threading
+import time
 
 # --- CONFIGURACIÓN DE NOTION ---
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
@@ -201,7 +203,7 @@ def process_command(comando_completo):
 
     # --- NUEVO: CÁLCULO MANUAL PARA "EN X HORAS/MINUTOS" ---
     # Esto evita depender de dateparser que a veces falla con "en una hora"
-    elif comando_regla and (match := re.search(r'en\s+(.+?)\s+(horas?|hr?s?|minutos?|mins?)', comando_regla, re.IGNORECASE)):
+    elif comando_regla and (match := re.search(r'en\s+(.+?)\s+(horas?|hr?s?|minutos?|mins?|segundos?|segs?)', comando_regla, re.IGNORECASE)):
         cantidad_txt = match.group(1).lower().strip()
         unidad = match.group(2).lower()
         
@@ -223,6 +225,8 @@ def process_command(comando_completo):
                 fecha_encontrada = hoy + timedelta(hours=cantidad)
             elif 'min' in unidad:
                 fecha_encontrada = hoy + timedelta(minutes=cantidad)
+            elif 'seg' in unidad:
+                fecha_encontrada = hoy + timedelta(seconds=cantidad)
     
     # Si no hubo detección personalizada, usar dateparser
     if not fecha_encontrada and comando_regla:
@@ -447,6 +451,20 @@ def create_task_logic(comando):
                     "is_soon": True,
                     "msg": msg_voz
                 }
+                
+                # --- THREADING TRIGGER ---
+                # Retrieve the page ID from the LAST response found
+                if last_response and last_response.status_code == 200:
+                    try:
+                        new_page_id = last_response.json().get('id')
+                        title_safe = items_a_guardar[0]["Nombre"]["title"][0]["text"]["content"]
+                        priority_safe = items_a_guardar[0]["Prioridad"]["select"]["name"]
+                        
+                        # Start Timer
+                        timer = threading.Timer(diff_int, send_reminder_now, args=[title_safe, priority_safe, new_page_id])
+                        timer.start()
+                    except Exception as e:
+                         print(f"Error starting timer: {e}")
         
         return result_json, 200
     else:
@@ -748,6 +766,34 @@ def daily_summary():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+# --- INTERNAL SCHEDULER (IMMEDIATE REMINDERS) ---
+def send_reminder_now(title, priority, page_id):
+    """Function to send a reminder immediately via threading."""
+    try:
+        # Wait a bit or logic handled by Timer
+         # Construir payload de mensaje
+        icon = "🔴" if "Alta" in priority or "Urgente" in priority else "🔵"
+        msg_text = f"{icon} *RECORDATORIO* {icon}\n\n📌 *{title}*\n⏰ AHORA (Programado)\n🚨 Prioridad: {priority}"
+        
+        reply_markup = {
+            "inline_keyboard": [[
+                {"text": "✅ Hecho / Terminar", "callback_data": f"done_{page_id}"},
+                {"text": "⏱ Posponer", "callback_data": f"snooze_{page_id}"}
+            ]]
+        }
+        
+        tg_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(tg_url, json={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": msg_text,
+            "parse_mode": "Markdown",
+            "reply_markup": reply_markup
+        })
+        print(f"Immediate reminder sent for: {title}")
+        
+    except Exception as e:
+        print(f"Error in internal scheduler: {e}")
 
 # --- WEBHOOK PARA RECIBIR CLICS DE TELEGRAM ---
 @app.route("/telegram_webhook", methods=["POST"])
