@@ -20,6 +20,10 @@ TIMEZONE = 'America/Lima'
 
 app = Flask(__name__)
 
+# --- ESTADO GLOBAL ---
+PENDING_SNOOZE = {} # Format: {chat_id: page_id}
+
+
 # Función para convertir fechas de Python a formato ISO 8601 (requerido por Notion)
 def format_date_to_iso(dt_object):
     """Convierte un objeto datetime con zona horaria a formato ISO 8601."""
@@ -149,7 +153,7 @@ def process_command(comando_completo):
     time_only_match = re.match(r'^(\d+(\.\d+)?)\s*(segundos?|segs?|minutos?|mins?|horas?|hrs?)$', tarea_titulo, re.IGNORECASE)
     if time_only_match:
         print("DEBUG: Guard TRIGGERED") # DEBUG
-        return {"error": "Parece que quieres posponer. Por favor, **responde (Reply)** al mensaje original del recordatorio."}, 400
+        return None, {"error": "Parece que quieres posponer. Por favor, **responde (Reply)** al mensaje original del recordatorio."}
 
     # --- 3. EXTRACCIÓN DE FECHAS ---
     
@@ -381,6 +385,9 @@ def create_task_logic(comando):
 
     properties_payload, meta_data = process_command(comando)
 
+    if properties_payload is None:
+        return {"error": meta_data.get("error", "Error desconocido")}, 400
+
     if not properties_payload:
         return {"error": "No se pudo procesar el comando"}, 400
 
@@ -486,6 +493,109 @@ def create_task_logic(comando):
             "error": "Error al insertar en Notion",
             "notion_response": notion_error
         }, last_response.status_code if last_response else 500
+
+
+
+# --- HELPER: LOGICA DE RESPUESTA A POSPONER ---
+def handle_snooze_response(chat_id, text, page_id):
+    """Procesa el tiempo dicho por el usuario y actualiza Notion."""
+    import pytz
+    tz = pytz.timezone(TIMEZONE)
+    now = datetime.now(tz)
+    new_reminder_dt = None
+    
+    # Regex manual para "en X"
+    match_en = re.search(r'en\s+(.+?)\s+(horas?|hr?s?|minutos?|mins?|segundos?|segs?)', text, re.IGNORECASE)
+    if match_en:
+         val = match_en.group(1)
+         unit = match_en.group(2)
+         try:
+            cant = float(val)
+         except:
+            cant = 1 # fallback simple
+            
+         if 'hora' in unit: new_reminder_dt = now + timedelta(hours=cant)
+         elif 'min' in unit: new_reminder_dt = now + timedelta(minutes=cant)
+         elif 'seg' in unit: new_reminder_dt = now + timedelta(seconds=cant)
+    
+    # Si no match manual, dateparser
+    if not new_reminder_dt:
+        new_reminder_dt = dateparser.parse(text, settings={'PREFER_DATES_FROM': 'future', 'TIMEZONE': TIMEZONE, 'RETURN_AS_TIMEZONE_AWARE': True})
+
+    if new_reminder_dt:
+        # Garantizar timezone
+        if new_reminder_dt.tzinfo is None:
+            new_reminder_dt = tz.localize(new_reminder_dt)
+            
+        # ACTUALIZAR NOTION
+        url_patch = f"https://api.notion.com/v1/pages/{page_id}"
+        headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
+        
+        # Formato ISO
+        iso_date = format_date_to_iso(new_reminder_dt)
+        
+        payload = {
+            "properties": {
+                "Fecha de Recordatorio": {
+                    "date": {"start": iso_date}
+                }
+            }
+        }
+        
+        r_patch = requests.patch(url_patch, headers=headers, json=payload)
+        
+        if r_patch.status_code == 200:
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
+                "chat_id": chat_id,
+                "text": f"✅ Pospuesto para: *{new_reminder_dt.strftime('%d/%m %I:%M %p')}*",
+                "parse_mode": "Markdown"
+            })
+        else:
+             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
+                "chat_id": chat_id, "text": f"⚠️ Error Notion: {r_patch.text}"
+            })
+    else:
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
+                "chat_id": chat_id, "text": "⚠️ No entendí la fecha. Intenta de nuevo (ej: 'en 30 min')."
+            })
+    
+
+    # --- THREADING FOR SNOOZE (Immediate) ---
+    if new_reminder_dt:
+        diff_snooze = (new_reminder_dt - now).total_seconds()
+        if 0 < diff_snooze < 3600:
+             try:
+                # Simple Query to get Title/Priority AND Reprogramaciones
+                u_page = f"https://api.notion.com/v1/pages/{page_id}"
+                headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
+                r_page = requests.get(u_page, headers=headers) 
+                
+                if r_page.status_code == 200:
+                    p_data = r_page.json()
+                    p_props = p_data.get("properties", {})
+                    p_title = p_props.get("Nombre", {}).get("title", [])
+                    title_real = p_title[0].get("text", {}).get("content", "Tarea") if p_title else "Tarea"
+                    p_rio = p_props.get("Prioridad", {}).get("select", {}).get("name", "Normal")
+                    
+                    # Leer contador actual
+                    p_reprog = p_props.get("N° Reprogramaciones", {}).get("number")
+                    if p_reprog is None: p_reprog = 0
+                    current_rever = p_reprog + 1
+
+                    # Patch counter
+                    patch_counter = {
+                        "properties": {
+                            "N° Reprogramaciones": {"number": current_rever}
+                        }
+                    }
+                    requests.patch(u_page, headers=headers, json=patch_counter)
+                    
+                    timer = threading.Timer(diff_snooze, send_reminder_now, args=[title_real, p_rio, page_id])
+                    timer.start()
+                    print(f"Thread started for snooze: {diff_snooze}s. Reprogram: {current_rever}")
+             except Exception as ex:
+                 print(f"Error starting snooze thread: {ex}")
+
 
 
 # --- ENDPOINT QUE ENVÍA A NOTION (EL ORIGINAL) ---
@@ -856,24 +966,20 @@ def telegram_webhook():
         elif data.startswith("snooze_"):
             page_id = data.split("snooze_")[1]
             
+            # Guardamos estado (Sobrescribe si hay uno anterior, está bien)
+            PENDING_SNOOZE[str(chat_id)] = page_id
+
             # Responder al callback para quitar el estado de carga
             tg_url_answer = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
             requests.post(tg_url_answer, json={"callback_id": callback_id, "text": "Ok, ¿para cuándo?"})
             
             # Enviar mensaje preguntando nuevo tiempo (ForceReply)
-            # Incluimos el page_id en el texto de forma invisible/sutil para recuperarlo luego
-            # Usamos Markdown con link invisible zero-width o al final
-            # Estrategia simple: Texto al final
-            msg_text = f"⏳ ¿En cuánto tiempo (o a qué hora) quieres que te recuerde esta tarea?\n\n_(Responde a este mensaje. Ej: 30 min, 1 hora, mañana a las 9)_"
-            # Hack: Ocultamos el ID en una URL markdown que no se ve
-            # O simplemente lo ponemos explicito pero pequeño.
-            # Vamos a usar texto invisible : [ ](http://id_context/ID)
-            msg_text += f"[\u200b](http://context/{page_id})"
+            msg_text = f"⏳ ¿En cuánto tiempo (o a qué hora) quieres que te recuerde esta tarea?\n\n<i>(Responde a este mensaje. Ej: 30 min, 1 hora, mañana a las 9)</i>"
 
             tg_payload = {
                 "chat_id": chat_id,
                 "text": msg_text,
-                "parse_mode": "Markdown",
+                "parse_mode": "HTML",
                 "reply_markup": {
                     "force_reply": True,
                     "input_field_placeholder": "Ej: 15 minutos, mañana..."
@@ -940,6 +1046,17 @@ def telegram_webhook():
             # 6. PROCESAR COMO TEXTO
             text = transcribed_text.strip()
             
+            # --- 0. CHECK SNOOZE STATE for Voice ---
+            if str(chat_id) in PENDING_SNOOZE:
+                page_id = PENDING_SNOOZE[str(chat_id)]
+                handle_snooze_response(chat_id, text, page_id)
+                # Cleanup
+                del PENDING_SNOOZE[str(chat_id)]
+                # Clean temp files
+                if temp_oga and os.path.exists(temp_oga): os.remove(temp_oga)
+                if temp_wav and os.path.exists(temp_wav): os.remove(temp_wav)
+                return "OK", 200
+
             # --- COPIA LÓGICA DE TEXTO (DRY pendiente) ---
             
             # A. AGENDA
@@ -1027,152 +1144,16 @@ def telegram_webhook():
         chat_id = msg.get("chat", {}).get("id")
         text = msg.get("text", "").strip()
         
-        # --- DETECCIÓN DE RESPUESTA A SNOOZE (Reply) ---
-        reply_to = msg.get("reply_to_message")
-        if reply_to:
-            page_id = None
-            
-            # Estrategia 1: Buscar en entities (hidden link)
-            entities = reply_to.get("entities", [])
-            print(f"DEBUG: Reply entities: {entities}") # DEBUG
-            
-            for ent in entities:
-                if ent.get("type") == "text_link":
-                    url = ent.get("url", "")
-                    if "context/" in url:
-                         match_id = re.search(r'context/([a-zA-Z0-9\-]+)', url)
-                         if match_id:
-                             page_id = match_id.group(1)
-                             break
-            
-            if page_id:
-                
-                # Calcular nueva fecha usando la lógica existente en process_command o simple dateparser
-                # Reutilizamos lógica de clean y dateparser de arriba
-                # import dateparser removed
-                from datetime import datetime, timedelta
-                
-                # Usamos el texto del usuario como input de tiempo
-                # settings = {'PREFER_DATES_FROM': 'future', 'TIMEZONE': TIMEZONE, 'RETURN_AS_TIMEZONE_AWARE': True}
-                # Simplificado: Usamos process_command auxiliar o logica directa
-                # Como process_command extrae de todo, a veces es too much. Mejor dateparser limpio + hacks de "en X minutos"
-                
-                # --- HACK RAPIDO "EN X MINUTOS" (Copied from process_command) ---
-                import pytz
-                tz = pytz.timezone(TIMEZONE)
-                now = datetime.now(tz)
-                new_reminder_dt = None
-                
-                # Regex manual para "en X"
-                # Regex manual para "en X"
-                match_en = re.search(r'en\s+(.+?)\s+(horas?|hr?s?|minutos?|mins?|segundos?|segs?)', text, re.IGNORECASE)
-                if match_en:
-                     val = match_en.group(1)
-                     unit = match_en.group(2)
-                     try:
-                        cant = float(val)
-                     except:
-                        cant = 1 # fallback simple
-                        
-                     if 'hora' in unit: new_reminder_dt = now + timedelta(hours=cant)
-                     elif 'min' in unit: new_reminder_dt = now + timedelta(minutes=cant)
-                     elif 'seg' in unit: new_reminder_dt = now + timedelta(seconds=cant)
-                
-                # Si no match manual, dateparser
-                if not new_reminder_dt:
-                    new_reminder_dt = dateparser.parse(text, settings={'PREFER_DATES_FROM': 'future', 'TIMEZONE': TIMEZONE, 'RETURN_AS_TIMEZONE_AWARE': True})
+        # --- 0. CHECK SNOOZE STATE for Text ---
+        # Prioridad sobre cualquier otra cosa
+        if str(chat_id) in PENDING_SNOOZE:
+            page_id = PENDING_SNOOZE[str(chat_id)]
+            handle_snooze_response(chat_id, text, page_id)
+            del PENDING_SNOOZE[str(chat_id)]
+            return "OK", 200
 
-                if new_reminder_dt:
-                    # Garantizar timezone
-                    if new_reminder_dt.tzinfo is None:
-                        new_reminder_dt = tz.localize(new_reminder_dt)
-                        
-                    # ACTUALIZAR NOTION
-                    url_patch = f"https://api.notion.com/v1/pages/{page_id}"
-                    headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
-                    
-                    # Formato ISO
-                    iso_date = format_date_to_iso(new_reminder_dt)
-                    
-                    payload = {
-                        "properties": {
-                            "Fecha de Recordatorio": {
-                                "date": {"start": iso_date}
-                            },
-                             # Opcional: Cambiar estado a "Sin empezar" si estaba en otro (para asegurar que vuelva a salir)
-                             # Pero mejor no tocar estado si no se pide.
-                        }
-                    }
-                    
-                    r_patch = requests.patch(url_patch, headers=headers, json=payload)
-                    
-                    if r_patch.status_code == 200:
-                        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
-                            "chat_id": chat_id,
-                            "text": f"✅ Pospuesto para: *{new_reminder_dt.strftime('%d/%m %I:%M %p')}*",
-                            "parse_mode": "Markdown"
-                        })
-                    else:
-                         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
-                            "chat_id": chat_id, "text": f"⚠️ Error Notion: {r_patch.text}"
-                        })
-                else:
-                    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
-                            "chat_id": chat_id, "text": "⚠️ No entendí la fecha. Intenta de nuevo (ej: 'en 30 min')."
-                        })
-                
+        # --- A. DETECTAR LISTA ---
 
-                # --- THREADING FOR SNOOZE (Immediate) ---
-                # Check directly if it's soon (< 1h)
-                if new_reminder_dt:
-                    diff_snooze = (new_reminder_dt - now).total_seconds()
-                    if 0 < diff_snooze < 3600:
-                         try:
-                            # Re-fetch title/priority not easy without query.
-                            # Just use generic info or assume it's same.
-                            # For better UX, we could pass title in hidden link too? No, too long.
-                            # Query Notion to start thread with correct info
-                            # OR: Just send generic "Recordatorio Pospuesto"
-                            
-                            
-                            # Simple Query to get Title/Priority AND Reprogramaciones
-                            u_page = f"https://api.notion.com/v1/pages/{page_id}"
-                            r_page = requests.get(u_page, headers=headers) # Headers defined above in update
-                            current_rever = 0 # Default
-
-                            if r_page.status_code == 200:
-                                p_data = r_page.json()
-                                p_props = p_data.get("properties", {})
-                                p_title = p_props.get("Nombre", {}).get("title", [])
-                                title_real = p_title[0].get("text", {}).get("content", "Tarea") if p_title else "Tarea"
-                                p_rio = p_props.get("Prioridad", {}).get("select", {}).get("name", "Normal")
-                                
-                                # Leer contador actual
-                                p_reprog = p_props.get("N° Reprogramaciones", {}).get("number")
-                                if p_reprog is None: p_reprog = 0
-                                current_rever = p_reprog + 1
-
-                                # Update counter in Notion
-                                # Re-patch to update counter (lazy approach: update date again or just merge logic?)
-                                # We already patched date above. Ideally we should have done it in one go.
-                                # But we didn't have the current value?
-                                # We can just patch the number now.
-                                patch_counter = {
-                                    "properties": {
-                                        "N° Reprogramaciones": {"number": current_rever}
-                                    }
-                                }
-                                requests.patch(u_page, headers=headers, json=patch_counter)
-                                
-                                timer = threading.Timer(diff_snooze, send_reminder_now, args=[title_real, p_rio, page_id])
-                                timer.start()
-                                print(f"Thread started for snooze: {diff_snooze}s. Reprogram: {current_rever}")
-                         except Exception as ex:
-                             print(f"Error starting snooze thread: {ex}")
-
-                return "OK", 200 # Stop processing here
-
-        lista_nombre = None
         agenda_date = None
         
         # --- A. DETECTAR LISTA ---
