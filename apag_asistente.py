@@ -334,7 +334,12 @@ def process_command(comando_completo):
 
     properties = {k: v for k, v in properties.items() if v is not None}
 
-    return properties
+    # Meta datos para lógica de scheduling
+    meta_data = {
+        "reminder_dt": fecha_recordatorio_dt
+    }
+
+    return properties, meta_data
 
 # --- ENDPOINT QUE ENVÍA A NOTION (EL ORIGINAL) ---
 @app.route("/agendar", methods=["POST"])
@@ -353,7 +358,7 @@ def agendar_tarea():
         if not comando:
             return jsonify({"error": "No se recibió el comando"}), 400
 
-        properties_payload = process_command(comando)
+        properties_payload, meta_data = process_command(comando)
 
         if not properties_payload:
             return jsonify({"error": "No se pudo procesar el comando o no se extrajo información útil"}), 400
@@ -376,7 +381,31 @@ def agendar_tarea():
         
         # Notion devuelve 200 para creación exitosa
         if response.status_code == 200:
-            return jsonify({"mensaje": "Tarea agendada con éxito", "data": properties_payload}), 200
+            result_json = {"mensaje": "Tarea agendada con éxito", "data": properties_payload}
+            
+            # --- SMART SCHEDULING LOGIC ---
+            # Si el recordatorio es pronto (menos de 65 mins), le decimos a Tasker que espere
+            reminder_dt = meta_data.get("reminder_dt")
+            if reminder_dt:
+                import pytz
+                tz = pytz.timezone(TIMEZONE)
+                now = datetime.now(tz)
+                
+                # Asegurar que ambos sean comparables (aware)
+                if reminder_dt.tzinfo is None:
+                    reminder_dt = tz.localize(reminder_dt)
+                
+                diff = (reminder_dt - now).total_seconds()
+                
+                # Si falta entre 1 segundo y 65 minutos (3900 segs)
+                if 0 < diff < 3900:
+                    result_json["smart_schedule"] = {
+                        "wait_seconds": int(diff),
+                        "is_soon": True,
+                        "msg": f"Alerta programada en {int(diff)} segundos"
+                    }
+            
+            return jsonify(result_json), 200
         else:
             # Intentar obtener el JSON de error de Notion
             try:
@@ -409,13 +438,14 @@ def debug_command():
             return jsonify({"error": "No se recibió el comando"}), 400
 
         # Procesar el comando para obtener todas las propiedades
-        properties_payload = process_command(comando)
+        properties_payload, meta_data = process_command(comando)
 
         # Devolver el payload generado antes de enviarlo a Notion
         return jsonify({
             "status": "DEBUG OK",
             "comando_entrada": comando,
-            "payload_generado": properties_payload
+            "payload_generado": properties_payload,
+            "meta_generada": str(meta_data)
         }), 200
 
     except Exception as e:
