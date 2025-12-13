@@ -44,6 +44,7 @@ def process_command(comando_completo):
         r'((?:el\s+)?(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)(?:\s+a\s+las?\s+\d{1,2}(?:\s*(?:am|pm|de\s+la\s+(?:mañana|tarde|noche)))?)?)',
         r'(\d{1,2}\s+de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(?:\s+(?:de\s+)?\d{4})?(?:\s+a\s+las?\s+\d{1,2}(?:\s*(?:am|pm|de\s+la\s+(?:mañana|tarde|noche)))?)?)',
         r'(a\s+las?\s+\d{1,2}(?:\s*(?:am|pm|de\s+la\s+(?:mañana|tarde|noche)))?)',
+        r'(en\s+(?:\d+|un|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|media|med\w+)\s+(?:horas?|hr?s?|mins?|minutos?))',
     ]
 
     # Helper function to extract and remove matching patterns from text
@@ -189,6 +190,23 @@ def process_command(comando_completo):
     
     # Si no hubo detección personalizada, usar dateparser
     if not fecha_encontrada and comando_regla:
+        # --- NORMALIZACIÓN DE NÚMEROS EN TEXTO (Fix para "en dos horas") ---
+        # Map simple Spanish numbers to digits
+        num_map = {
+            'un': '1', 'una': '1', 'dos': '2', 'tres': '3', 'cuatro': '4',
+            'cinco': '5', 'seis': '6', 'siete': '7', 'ocho': '8', 'nueve': '9', 'diez': '10',
+            'media': '0.5' # Special case, dateparser might need help 
+        }
+        
+        # Regex to find these words isolated
+        for word, digit in num_map.items():
+            # Replace whole word matches only
+            comando_regla = re.sub(r'\b' + re.escape(word) + r'\b', digit, comando_regla, flags=re.IGNORECASE)
+            
+        # Fix "en 0.5 hora" -> "en 30 minutos" for better parsing if needed, but "en 0.5 horas" might work.
+        # Let's handle "media hora" explicitly if the above is clunky
+        comando_regla = re.sub(r'media\s+hora', '30 minutos', comando_regla, flags=re.IGNORECASE)
+        
         fecha_encontrada = dateparser.parse(comando_regla, settings=settings)
 
     # --- 3.1. EXTRACCIÓN DE HORA INDEPENDIENTE (Fix para "mañana ... a las 6 pm") ---
