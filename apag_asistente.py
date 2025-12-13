@@ -710,7 +710,7 @@ def telegram_webhook():
                 requests.post(tg_url_answer, json={"callback_id": callback_id, "text": "Error actualizando Notion 😢"})
 
     # 2. Manejo de MENSAJES de texto (Para consultar listas)
-    # 1.5. Manejo de MENSAJES DE VOZ (Nueva Función)
+    # 1.5. Manejo de MENSAJES DE VOZ (Google Speech Recognition - FREE)
     elif "voice" in update.get("message", {}):
         msg = update["message"]
         chat_id = msg.get("chat", {}).get("id")
@@ -720,19 +720,15 @@ def telegram_webhook():
         # 1. Obtener Link del Archivo
         tg_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
         
+        temp_oga = None
+        temp_wav = None
+
         try:
             import requests
             import os
-            
-            # OpenAI Key (Requerida)
-            OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-            
-            if not OPENAI_API_KEY:
-                # Fallback amigable si falta la Key
-                requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
-                    "chat_id": chat_id, "text": "⚠️ Falta configurar OPENAI_API_KEY en el servidor para usar audios."
-                })
-                return "Config Error", 200
+            import speech_recognition as sr
+            from pydub import AudioSegment
+            import io
 
             # Get File Path from Telegram
             res_path = requests.get(tg_file_url).json()
@@ -742,55 +738,45 @@ def telegram_webhook():
             file_path = res_path["result"]["file_path"]
             download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
             
-             # 2. Descargar y Transcribir (Stream to memory)
-            # Nota: Usamos 'openai' library
-            from openai import OpenAI
-            import io
-            
-            # Descargar bytes
+            # 2. Descargar
             audio_content = requests.get(download_url).content
             
-            # Nombre de archivo simulado para que Whisper sepa el formato (Telegram manda .oga)
-            audio_file = io.BytesIO(audio_content)
-            audio_file.name = "voice_message.oga" 
-
-            client = OpenAI(api_key=OPENAI_API_KEY)
+            # Guardar temporalmente como .oga
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".oga", delete=False) as f:
+                f.write(audio_content)
+                temp_oga = f.name
             
-            # Transcribir
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1", 
-                file=audio_file,
-                language="es" # Force Spanish for better accuracy
-            )
+            # 3. Convertir a WAV (Requerido por SpeechRecognition)
+            # pydub usa ffmpeg (debe estar en el sistema/Aptfile)
+            temp_wav = temp_oga.replace(".oga", ".wav")
+            audio = AudioSegment.from_ogg(temp_oga)
+            audio.export(temp_wav, format="wav")
             
-            transcribed_text = transcript.text
+            # 4. Transcribir con Google Speech Recognition
+            r = sr.Recognizer()
+            with sr.AudioFile(temp_wav) as source:
+                audio_data = r.record(source)
+                # language='es-ES' (Español)
+                transcribed_text = r.recognize_google(audio_data, language="es-ES")
             
-            # 3. Informar al usuario lo que se entendió
+            # 5. Informar al usuario lo que se entendió
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
                 "chat_id": chat_id, 
                 "text": f"🗣️ *Escuché*: \"{transcribed_text}\"", 
                 "parse_mode": "Markdown"
             })
             
-            # 4. PROCESAR COMO TEXTO (Recursividad simulada)
-            # Asignamos el texto transcrito a la variable 'text' y dejamos que el flujo continue
-            # Para esto, necesitamos reestructurar un poco el flujo o llamar a la lógica de abajo.
-            # Lo más limpio es inyectar el texto en 'update' y llamar recursivamente o extraer la lógica.
-            # Simplemente sobreescribiremos 'msg["text"]' y saltaremos al bloque de texto? 
-            # No, porque es un if/elif. Mejor llamamos la logica de texto aqui mismo.
-            
-            # --- REUTILIZAR LOGICA DE TEXTO ---
-            # (Simplificado: Solo Agenda o Crear Tarea, las listas por voz son raras pero posibles)
+            # 6. PROCESAR COMO TEXTO
             text = transcribed_text.strip()
             
-            # Copiamos la lógica del bloque "message" (Simplificada)
+            # --- COPIA LÓGICA DE TEXTO (DRY pendiente) ---
             
             # A. AGENDA
             import re
             import dateparser
             agenda_date = None
             if re.search(r'(agenda|que\s+tengo|qué\s+tengo|actividades|pendientes|calendario)', text, re.IGNORECASE):
-                 # ... (Misma logica de date parser)
                  clean_text = re.sub(r'(agenda|que\s+tengo|qué\s+tengo|actividades|pendientes|calendario)', '', text, flags=re.IGNORECASE).strip()
                  if not clean_text: clean_text = "hoy"
                  try: 
@@ -798,24 +784,57 @@ def telegram_webhook():
                  except: pass
 
             if agenda_date:
-                # ... Copia lógica Agenda (Refactorizar sería ideal, pero por ahora DRY manual)
-                # LLAMAR RECURSIVAMENTE A SÍ MISMO SIMULANDO UN MENSAJE DE TEXTO
-                # Esto es un truco: Llamamos a process_text_logic(text, chat_id)
-                pass 
-            
-            # B. CREAR TAREA (Default)
-            # Si no es agenda, asumimos tarea o lista
-            result, code = create_task_logic(text)
-            if code == 200:
-                created_title = result.get("titulo_principal", "Tarea")
-                is_soon = result.get("smart_schedule", {}).get("is_soon", False)
-                msg_voz = result.get("smart_schedule", {}).get("msg", "")
-                
-                msg_response = f"✅ *Agendado*: {created_title}"
-                if is_soon: msg_response += f"\n\n🔔 {msg_voz}"
-            else:
-                 msg_response = f"❌ Error creando: {result.get('error')}"
+                # RECURSIVIDAD SIMULADA:
+                # No podemos llamar a la ruta HTTP facilmente, así que lo manejamos como error o "Feature no disponible en voz completa".
+                # O mejor, ejecutamos la logica de agenda aqui (duplicada por ahora).
+                # (Simplificación: Si es agenda por voz, le decimos que mire el chat escrito o implementamos la Query aqui)
+                # Para evitar duplicar 50 lineas, vamos a instanciar la logica de Query directamente.
+                pass # Por brevedad, asumiremos que el usuario usa "Agenda" por texto o aceptamos que por voz solo crea tareas por ahora si es complejo.
+                # PERO: El usuario pidió funcionalidad completa. Vamos a intentar parsear "Agenda" aqui también.
+                # (Mejor: Llamar a create_task_logic solo si no es agenda).
+                pass
 
+            # Si es Agenda (y tenemos fecha), ejecutamos la consulta rapida
+            if agenda_date:
+                # ... Lógica de Agenda (Simplificada) ...
+                 import pytz
+                 tz = pytz.timezone(TIMEZONE)
+                 if agenda_date.tzinfo is None: agenda_date = tz.localize(agenda_date)
+                 start_day = agenda_date.replace(hour=0, minute=0, second=0)
+                 end_day = agenda_date.replace(hour=23, minute=59, second=59)
+                 dia_str = start_day.strftime("%A %d/%m")
+                 
+                 url_query = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
+                 headers_notion = {"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
+                 q_payload = {
+                    "filter": {"and": [{"property": "Fecha de Recordatorio", "date": {"on_or_after": start_day.isoformat()}}, {"property": "Fecha de Recordatorio", "date": {"on_or_before": end_day.isoformat()}}]},
+                    "sorts": [{"property": "Fecha de Recordatorio", "direction": "ascending"}]
+                 }
+                 data_n = requests.post(url_query, headers=headers_notion, json=q_payload).json()
+                 results = data_n.get("results", [])
+                 if results:
+                    msg_response = f"📅 *Agenda ({dia_str})*:\n"
+                    for res in results:
+                        t = res.get("properties", {}).get("Nombre", {}).get("title", [])
+                        t_txt = t[0].get("text", {}).get("content", "") if t else ""
+                        msg_response += f"▫️ {t_txt}\n"
+                 else:
+                    msg_response = f"📅 Nada para {dia_str}."
+                 
+            else:
+                # B. CREAR TAREA (Default)
+                result, code = create_task_logic(text)
+                if code == 200:
+                    created_title = result.get("titulo_principal", "Tarea")
+                    is_soon = result.get("smart_schedule", {}).get("is_soon", False)
+                    msg_voz = result.get("smart_schedule", {}).get("msg", "")
+                    
+                    msg_response = f"✅ *Agendado*: {created_title}"
+                    if is_soon: msg_response += f"\n\n🔔 {msg_voz}"
+                else:
+                    msg_response = f"❌ Error: {result.get('error')}"
+
+            # Enviar Respuesta Final
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
                 "chat_id": chat_id, "text": msg_response, "parse_mode": "Markdown"
             })
@@ -824,7 +843,12 @@ def telegram_webhook():
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
                 "chat_id": chat_id, "text": f"⚠️ Error audio: {str(e)}"
             })
-            
+        
+        finally:
+            # Limpieza
+            if temp_oga and os.path.exists(temp_oga): os.remove(temp_oga)
+            if temp_wav and os.path.exists(temp_wav): os.remove(temp_wav)
+
         return "OK", 200
 
     # 2. Manejo de MENSAJES de texto
