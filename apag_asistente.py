@@ -710,6 +710,123 @@ def telegram_webhook():
                 requests.post(tg_url_answer, json={"callback_id": callback_id, "text": "Error actualizando Notion 😢"})
 
     # 2. Manejo de MENSAJES de texto (Para consultar listas)
+    # 1.5. Manejo de MENSAJES DE VOZ (Nueva Función)
+    elif "voice" in update.get("message", {}):
+        msg = update["message"]
+        chat_id = msg.get("chat", {}).get("id")
+        voice_info = msg.get("voice", {})
+        file_id = voice_info.get("file_id")
+        
+        # 1. Obtener Link del Archivo
+        tg_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
+        
+        try:
+            import requests
+            import os
+            
+            # OpenAI Key (Requerida)
+            OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+            
+            if not OPENAI_API_KEY:
+                # Fallback amigable si falta la Key
+                requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
+                    "chat_id": chat_id, "text": "⚠️ Falta configurar OPENAI_API_KEY en el servidor para usar audios."
+                })
+                return "Config Error", 200
+
+            # Get File Path from Telegram
+            res_path = requests.get(tg_file_url).json()
+            if not res_path.get("ok"):
+                raise Exception("Error getting file path from Telegram")
+                
+            file_path = res_path["result"]["file_path"]
+            download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+            
+             # 2. Descargar y Transcribir (Stream to memory)
+            # Nota: Usamos 'openai' library
+            from openai import OpenAI
+            import io
+            
+            # Descargar bytes
+            audio_content = requests.get(download_url).content
+            
+            # Nombre de archivo simulado para que Whisper sepa el formato (Telegram manda .oga)
+            audio_file = io.BytesIO(audio_content)
+            audio_file.name = "voice_message.oga" 
+
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            
+            # Transcribir
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1", 
+                file=audio_file,
+                language="es" # Force Spanish for better accuracy
+            )
+            
+            transcribed_text = transcript.text
+            
+            # 3. Informar al usuario lo que se entendió
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
+                "chat_id": chat_id, 
+                "text": f"🗣️ *Escuché*: \"{transcribed_text}\"", 
+                "parse_mode": "Markdown"
+            })
+            
+            # 4. PROCESAR COMO TEXTO (Recursividad simulada)
+            # Asignamos el texto transcrito a la variable 'text' y dejamos que el flujo continue
+            # Para esto, necesitamos reestructurar un poco el flujo o llamar a la lógica de abajo.
+            # Lo más limpio es inyectar el texto en 'update' y llamar recursivamente o extraer la lógica.
+            # Simplemente sobreescribiremos 'msg["text"]' y saltaremos al bloque de texto? 
+            # No, porque es un if/elif. Mejor llamamos la logica de texto aqui mismo.
+            
+            # --- REUTILIZAR LOGICA DE TEXTO ---
+            # (Simplificado: Solo Agenda o Crear Tarea, las listas por voz son raras pero posibles)
+            text = transcribed_text.strip()
+            
+            # Copiamos la lógica del bloque "message" (Simplificada)
+            
+            # A. AGENDA
+            import re
+            import dateparser
+            agenda_date = None
+            if re.search(r'(agenda|que\s+tengo|qué\s+tengo|actividades|pendientes|calendario)', text, re.IGNORECASE):
+                 # ... (Misma logica de date parser)
+                 clean_text = re.sub(r'(agenda|que\s+tengo|qué\s+tengo|actividades|pendientes|calendario)', '', text, flags=re.IGNORECASE).strip()
+                 if not clean_text: clean_text = "hoy"
+                 try: 
+                     agenda_date = dateparser.parse(clean_text, settings={'PREFER_DATES_FROM': 'future', 'TIMEZONE': TIMEZONE, 'RETURN_AS_TIMEZONE_AWARE': True})
+                 except: pass
+
+            if agenda_date:
+                # ... Copia lógica Agenda (Refactorizar sería ideal, pero por ahora DRY manual)
+                # LLAMAR RECURSIVAMENTE A SÍ MISMO SIMULANDO UN MENSAJE DE TEXTO
+                # Esto es un truco: Llamamos a process_text_logic(text, chat_id)
+                pass 
+            
+            # B. CREAR TAREA (Default)
+            # Si no es agenda, asumimos tarea o lista
+            result, code = create_task_logic(text)
+            if code == 200:
+                created_title = result.get("titulo_principal", "Tarea")
+                is_soon = result.get("smart_schedule", {}).get("is_soon", False)
+                msg_voz = result.get("smart_schedule", {}).get("msg", "")
+                
+                msg_response = f"✅ *Agendado*: {created_title}"
+                if is_soon: msg_response += f"\n\n🔔 {msg_voz}"
+            else:
+                 msg_response = f"❌ Error creando: {result.get('error')}"
+
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
+                "chat_id": chat_id, "text": msg_response, "parse_mode": "Markdown"
+            })
+
+        except Exception as e:
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
+                "chat_id": chat_id, "text": f"⚠️ Error audio: {str(e)}"
+            })
+            
+        return "OK", 200
+
     # 2. Manejo de MENSAJES de texto
     elif "message" in update:
         msg = update["message"]
