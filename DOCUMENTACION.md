@@ -36,6 +36,12 @@ Cuando recibes un recordatorio, el bot envía un botón de **"Posponer"**.
 *   Puedes responder natural: _"En 1 hora"_, _"Mañana a las 9"_.
 *   El sistema actualiza la fecha en Notion automáticamente.
 
+### 5. Inteligencia Artificial (Brain) 🧠
+El bot cuenta con **Google Gemini AI** para situaciones donde los comandos tradicionales fallan.
+
+*   **Conversación Libre**: Puedes preguntar cosas generales como _"¿Cómo está el clima hoy?"_ o _"Dame una idea para la cena"_.
+*   **Fallback Inteligente**: Si intentas crear una tarea y el sistema no entiende el texto (ej: Tarea vacía), la IA intentará descifrar tu intención y responderte o sugerir la acción correcta.
+
 ---
 
 ## 🛠️ Arquitectura Técnica
@@ -45,6 +51,7 @@ Cuando recibes un recordatorio, el bot envía un botón de **"Posponer"**.
 *   **Base de Datos**: Notion (vía Notion API).
 *   **Mensajería**: Telegram Bot API.
 *   **Procesamiento de Voz**: OpenAI Whisper (o librería `SpeechRecognition` local según configuración) + `pydub`.
+*   **Cerebro IA**: Google Gemini 1.5 Flash (vía `google-generativeai`).
 *   **Parsing de Fechas**: Librería `dateparser` + Regex personalizados para español.
 
 ### Archivos Clave
