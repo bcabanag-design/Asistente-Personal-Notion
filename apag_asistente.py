@@ -399,10 +399,20 @@ def agendar_tarea():
                 
                 # Si falta entre 1 segundo y 65 minutos (3900 segs)
                 if 0 < diff < 3900:
+                    diff_int = int(diff)
+                    if diff_int >= 60:
+                        minutos = diff_int // 60
+                        seg_rest = diff_int % 60
+                        # Round up if close
+                        if seg_rest > 30: minutos += 1
+                        msg_voz = f"Listo. Te aviso en {minutos} minutos."
+                    else:
+                        msg_voz = f"Listo. Te aviso en {diff_int} segundos."
+
                     result_json["smart_schedule"] = {
-                        "wait_seconds": int(diff),
+                        "wait_seconds": diff_int,
                         "is_soon": True,
-                        "msg": f"Alerta programada en {int(diff)} segundos"
+                        "msg": msg_voz
                     }
             
             return jsonify(result_json), 200
