@@ -548,6 +548,7 @@ def check_reminders():
              
         data = response.json()
         tasks_sent = 0
+        tasks_text_list = []
         
         # 3. ENVIAR MENSAJES INDIVIDUALES CON BOTÓN
         tg_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -578,6 +579,9 @@ def check_reminders():
             # Mensaje Bonito
             msg_text = f"{icon} *RECORDATORIO* {icon}\n\n📌 *{title}*\n⏰ {hora_legible}\n🚨 Prioridad: {priority}"
             
+            # Guardar texto para voz
+            tasks_text_list.append(f"Recordatorio: {title}")
+            
             # Teclado Inline (Botón)
             reply_markup = {
                 "inline_keyboard": [[
@@ -596,7 +600,8 @@ def check_reminders():
             
         return jsonify({
             "count": tasks_sent,
-            "status": "Messages sent" if tasks_sent > 0 else "No pending tasks"
+            "status": "Messages sent" if tasks_sent > 0 else "No pending tasks",
+            "voice_texts": tasks_text_list
         }), 200
 
     except Exception as e:
