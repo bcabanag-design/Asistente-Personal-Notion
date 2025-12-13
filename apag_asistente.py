@@ -420,7 +420,7 @@ def health_check():
 TELEGRAM_TOKEN = "8277083663:AAFQzy180bpJGhcHn-BN9ESgVvVySjTRGAo"
 TELEGRAM_CHAT_ID = "2135365686"
 
-# --- ENDPOINT DE RECORDATORIOS (PARA TASKER) ---
+# --- ENDPOINT DE RECORDATORIOS INTERACTIVOS ---
 @app.route("/check_reminders", methods=["GET"])
 def check_reminders():
     if not NOTION_TOKEN or not DATABASE_ID:
@@ -429,14 +429,16 @@ def check_reminders():
     import requests
     import pytz
     
-    # 1. Definir ventana de tiempo (Ahora hasta Ahora + 1 Hora)
+    # 1. Definir ventana de tiempo (Persistencia: Desde hoy temprano hasta 2 horas adelante)
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz)
-    # Ajuste: Ventana de 1.5 horas para asegurar no perder nada cercano
-    next_window = now + timedelta(minutes=90) 
     
-    now_iso = now.isoformat()
-    next_window_iso = next_window.isoformat()
+    # "Siga haciendo el recordatorio": Buscamos tareas de las últimas 24h que sigan pendientes
+    start_window = now - timedelta(hours=24) 
+    end_window = now + timedelta(hours=2) 
+    
+    start_iso = start_window.isoformat()
+    end_iso = end_window.isoformat()
     
     # 2. Construir Query a Notion
     url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
@@ -446,20 +448,20 @@ def check_reminders():
         "Notion-Version": "2022-06-28"
     }
     
-    # Filtro: (Fecha >= Ahora) AND (Fecha <= Ahora + 90min) AND (Estado != Listo)
+    # Filtro: (Fecha >= Ayer) AND (Fecha <= Ahora + 2h) AND (Estado != Listo)
     query_payload = {
         "filter": {
             "and": [
                 {
                     "property": "Fecha de Recordatorio",
                     "date": {
-                        "on_or_after": now_iso
+                        "on_or_after": start_iso
                     }
                 },
                 {
                     "property": "Fecha de Recordatorio",
                     "date": {
-                        "on_or_before": next_window_iso
+                        "on_or_before": end_iso
                     }
                 },
                 {
@@ -479,21 +481,23 @@ def check_reminders():
              return jsonify({"error": "Error consultando Notion", "details": response.json()}), response.status_code
              
         data = response.json()
-        tasks = []
+        tasks_sent = 0
+        
+        # 3. ENVIAR MENSAJES INDIVIDUALES CON BOTÓN
+        tg_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         
         for result in data.get("results", []):
+            page_id = result.get("id") # ID de la página para el callback
             props = result.get("properties", {})
             
-            # Extraer Título
+            # Título
             title_list = props.get("Nombre", {}).get("title", [])
             title = title_list[0].get("text", {}).get("content", "Sin título") if title_list else "Sin título"
             
-            # Extraer Hora
+            # Hora
             date_prop = props.get("Fecha de Recordatorio", {}).get("date", {})
             start_date_str = date_prop.get("start")
-            
-            # Formatear hora para lectura humana (solo hora)
-            hora_legible = "??:??"
+            hora_legible = "Hora?"
             if start_date_str:
                 try:
                     dt = dateparser.parse(start_date_str)
@@ -501,31 +505,90 @@ def check_reminders():
                 except:
                     pass
             
-            # Extraer Prioridad
+            # Prioridad
             priority = props.get("Prioridad", {}).get("select", {}).get("name", "Normal")
+            icon = "🔴" if "Alta" in priority or "Urgente" in priority else "🔵"
+
+            # Mensaje Bonito
+            msg_text = f"{icon} *RECORDATORIO* {icon}\n\n📌 *{title}*\n⏰ {hora_legible}\n🚨 Prioridad: {priority}"
             
-            tasks.append(f"⏰ *{hora_legible}*: {title} ({priority})")
-            
-        count = len(tasks)
-        telegram_status = "No message sent (count sub-zero)"
-        
-        # 3. ENVIAR A TELEGRAM SI HAY TAREAS
-        if count > 0:
-            msg_text = f"🚨 *TIENES {count} TAREAS PENDIENTES:*\n\n" + "\n".join(tasks)
-            tg_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            tg_payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg_text, "parse_mode": "Markdown"}
+            # Teclado Inline (Botón)
+            reply_markup = {
+                "inline_keyboard": [[
+                    {"text": "✅ Hecho / Terminar", "callback_data": f"done_{page_id}"}
+                ]]
+            }
+
+            tg_payload = {
+                "chat_id": TELEGRAM_CHAT_ID, 
+                "text": msg_text, 
+                "parse_mode": "Markdown",
+                "reply_markup": reply_markup
+            }
             requests.post(tg_url, json=tg_payload)
-            telegram_status = "Message sent"
+            tasks_sent += 1
             
         return jsonify({
-            "count": count,
-            "telegram_status": telegram_status,
-            "tasks_found": tasks
+            "count": tasks_sent,
+            "status": "Messages sent" if tasks_sent > 0 else "No pending tasks"
         }), 200
 
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+# --- WEBHOOK PARA RECIBIR CLICS DE TELEGRAM ---
+@app.route("/telegram_webhook", methods=["POST"])
+def telegram_webhook():
+    update = request.get_json()
+    
+    # Verificar si es un callback_query (clic en botón)
+    if "callback_query" in update:
+        cb = update["callback_query"]
+        callback_id = cb["id"]
+        chat_id = cb["message"]["chat"]["id"]
+        message_id = cb["message"]["message_id"]
+        data = cb["data"] # Ej: "done_12345-abcde..."
+        
+        if data.startswith("done_"):
+            page_id = data.split("done_")[1]
+            
+            # 1. Actualizar Notion a "Listo"
+            notion_url = f"https://api.notion.com/v1/pages/{page_id}"
+            headers = {
+                "Authorization": f"Bearer {NOTION_TOKEN}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28"
+            }
+            payload = {
+                "properties": {
+                    "Estado": {
+                        "status": {"name": "Listo"}
+                    }
+                }
+            }
+            
+            import requests
+            res_notion = requests.patch(notion_url, headers=headers, json=payload)
+            
+            # 2. Responder a Telegram (Feedback visual)
+            tg_url_answer = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
+            if res_notion.status_code == 200:
+                requests.post(tg_url_answer, json={"callback_id": callback_id, "text": "¡Tarea completada! 🎉"})
+                
+                # Editar el mensaje original para tacharlo o indicar completado
+                tg_url_edit = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
+                new_text = f"✅ ~TAREA COMPLETADA~ ✅\n\n(Guardado en Notion)"
+                requests.post(tg_url_edit, json={
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "text": new_text,
+                    "parse_mode": "Markdown"
+                })
+            else:
+                requests.post(tg_url_answer, json={"callback_id": callback_id, "text": "Error actualizando Notion 😢"})
+
+    return "OK", 200
 
 if __name__ == "__main__":
     app.run(debug=True)
