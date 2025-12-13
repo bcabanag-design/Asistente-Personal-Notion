@@ -142,6 +142,12 @@ def process_command(comando_completo):
     # Remover espacios múltiples
     tarea_titulo = re.sub(r'\s{2,}', ' ', tarea_titulo).strip()
 
+    # --- GUARD: DETECT ACCIDENTAL TIME-ONLY MESSAGES ---
+    # Si el usuario dice solo "10 minutos" o "20 segundos", probablemente quería responder a un mensaje y falló.
+    # Evitamos crear tareas con ese nombre.
+    time_only_match = re.match(r'^(\d+(\.\d+)?)\s*(segundos?|segs?|minutos?|mins?|horas?|hrs?)$', tarea_titulo, re.IGNORECASE)
+    if time_only_match:
+        return {"error": "Parece que quieres posponer. Por favor, **responde (Reply)** al mensaje original del recordatorio."}, 400
 
     # --- 3. EXTRACCIÓN DE FECHAS ---
     
@@ -1124,9 +1130,12 @@ def telegram_webhook():
                             # Query Notion to start thread with correct info
                             # OR: Just send generic "Recordatorio Pospuesto"
                             
-                            # Simple Query to get Title/Priority
+                            
+                            # Simple Query to get Title/Priority AND Reprogramaciones
                             u_page = f"https://api.notion.com/v1/pages/{page_id}"
                             r_page = requests.get(u_page, headers=headers) # Headers defined above in update
+                            current_rever = 0 # Default
+
                             if r_page.status_code == 200:
                                 p_data = r_page.json()
                                 p_props = p_data.get("properties", {})
@@ -1134,9 +1143,26 @@ def telegram_webhook():
                                 title_real = p_title[0].get("text", {}).get("content", "Tarea") if p_title else "Tarea"
                                 p_rio = p_props.get("Prioridad", {}).get("select", {}).get("name", "Normal")
                                 
+                                # Leer contador actual
+                                p_reprog = p_props.get("N° Reprogramaciones", {}).get("number")
+                                if p_reprog is None: p_reprog = 0
+                                current_rever = p_reprog + 1
+
+                                # Update counter in Notion
+                                # Re-patch to update counter (lazy approach: update date again or just merge logic?)
+                                # We already patched date above. Ideally we should have done it in one go.
+                                # But we didn't have the current value?
+                                # We can just patch the number now.
+                                patch_counter = {
+                                    "properties": {
+                                        "N° Reprogramaciones": {"number": current_rever}
+                                    }
+                                }
+                                requests.patch(u_page, headers=headers, json=patch_counter)
+                                
                                 timer = threading.Timer(diff_snooze, send_reminder_now, args=[title_real, p_rio, page_id])
                                 timer.start()
-                                print(f"Thread started for snooze: {diff_snooze}s")
+                                print(f"Thread started for snooze: {diff_snooze}s. Reprogram: {current_rever}")
                          except Exception as ex:
                              print(f"Error starting snooze thread: {ex}")
 
