@@ -44,7 +44,7 @@ def consultar_ia(mensaje, contexto=""):
         return response.text.strip()
     except Exception as e:
         print(f"Error Gemini: {e}")
-        return "⚠️ Tuve un problema pensando la respuesta."
+        return f"⚠️ Error pensando: {str(e)}"
 import time
 
 # --- CONFIGURACIÓN DE NOTION ---
@@ -1382,7 +1382,9 @@ def telegram_webhook():
             # Lógica Híbrida:
             # Si parece una pregunta (Qué, Cómo, Cuándo...) O si el resultado de tarea es "vacío", usar IA.
             
-            is_question = re.match(r'^(qué|que|cómo|como|cuándo|cuando|dónde|donde|por\s+qué|quién|quien|hola|buenos|buenas)\b', text, re.IGNORECASE)
+            # Regex expandido para detectar charla vs tarea
+            question_pattern = r'^(qué|que|cómo|como|cuándo|cuando|dónde|donde|por\s+qué|quién|quien|hola|buenos|buenas|sabes|puedes|crees|tienes|podrías|podrias|cuál|cual|dime|explicame|explícame)\b'
+            is_question = re.match(question_pattern, text, re.IGNORECASE) or "?" in text
             
             if is_question:
                 # Caso directo: Es charla
