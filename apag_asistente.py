@@ -1020,6 +1020,7 @@ def telegram_webhook():
         text = msg.get("text", "").strip()
         
         # --- DETECCIÓN DE RESPUESTA A SNOOZE (Reply) ---
+        reply_to = msg.get("reply_to_message")
         if reply_to:
             page_id = None
             
