@@ -117,6 +117,16 @@ def process_command(comando_completo):
     }
     recordatorio_base, tarea_titulo = extract_and_remove(tarea_titulo, recordatorio_patterns, recordatorio_base)
     
+    # Lista / Contexto (Supermercado, Viaje, etc.)
+    lista = None
+    # Regex para: "para la lista X", "en la lista X", "lista X"
+    match_lista = re.search(r'(?:para|en)\s+(?:la\s+)?lista\s+([a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]+)', tarea_titulo, re.IGNORECASE)
+    if match_lista:
+        lista = match_lista.group(1).title() # Capitalize "Supermercado"
+        # Remover del título
+        tarea_titulo = tarea_titulo.replace(match_lista.group(0), '').strip()
+
+    
     # Logic to set timedelta object based on the extracted string
     if recordatorio_base == '1 día antes':
         regla_timedelta = timedelta(days=1)
@@ -330,6 +340,13 @@ def process_command(comando_completo):
                 "start": fecha_recordatorio_iso
             }
         } if fecha_recordatorio_iso else None,
+        
+        # PROPIEDAD LISTA (Nueva)
+        "Lista": {
+            "select": {
+                "name": lista
+            }
+        } if lista else None,
     }
 
     properties = {k: v for k, v in properties.items() if v is not None}
@@ -658,6 +675,78 @@ def telegram_webhook():
                 })
             else:
                 requests.post(tg_url_answer, json={"callback_id": callback_id, "text": "Error actualizando Notion 😢"})
+
+
+    # 2. Manejo de MENSAJES de texto (Para consultar listas)
+    elif "message" in update:
+        msg = update["message"]
+        chat_id = msg.get("chat", {}).get("id")
+        text = msg.get("text", "").lower() # normalizar a minúsculas
+        
+        # Regex flexible: "dame la lista del super", "ver lista compra", "lista viaje"
+        import re
+        match_lista = re.search(r'(?:dame|ver|consultar|mostrar|tengo)?\s*(?:la\s+)?lista\s+(?:de\s+|del\s+|para\s+el\s+|para\s+la\s+|para\s+)?(.+)', text)
+        
+        if match_lista:
+            lista_nombre = match_lista.group(1).strip().title() # "Supermercado"
+            
+            # Consultar Notion
+            url_query = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
+            headers = {
+                "Authorization": f"Bearer {NOTION_TOKEN}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28"
+            }
+            
+            # Filtro: Property "Lista" == lista_nombre AND Estado != Listo
+            query_payload = {
+                "filter": {
+                    "and": [
+                        {
+                            "property": "Lista",
+                            "select": {
+                                "equals": lista_nombre
+                            }
+                        },
+                        {
+                            "property": "Estado",
+                            "status": {
+                                "does_not_equal": "Listo"
+                            }
+                        }
+                    ]
+                }
+            }
+            
+            import requests
+            try:
+                response = requests.post(url_query, headers=headers, json=query_payload)
+                data = response.json()
+                
+                tasks = []
+                for res in data.get("results", []):
+                    # Extraer título
+                    title_list = res.get("properties", {}).get("Nombre", {}).get("title", [])
+                    if title_list:
+                        tasks.append(title_list[0].get("text", {}).get("content", ""))
+                
+                if tasks:
+                    msg_response = f"🛒 *Lista {lista_nombre}*: \n\n"
+                    for t in tasks:
+                        msg_response += f"▫️ {t}\n"
+                else:
+                    msg_response = f"🤷‍♂️ No encontré nada pendiente en la lista *{lista_nombre}*."
+
+            except Exception as e:
+                msg_response = f"⚠️ Error consultando Notion: {str(e)}"
+
+            # Enviar respuesta a Telegram
+            tg_url_send = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            requests.post(tg_url_send, json={
+                "chat_id": chat_id,
+                "text": msg_response,
+                "parse_mode": "Markdown"
+            })
 
     return "OK", 200
 
