@@ -676,20 +676,27 @@ def telegram_webhook():
             else:
                 requests.post(tg_url_answer, json={"callback_id": callback_id, "text": "Error actualizando Notion 😢"})
 
-
     # 2. Manejo de MENSAJES de texto (Para consultar listas)
     elif "message" in update:
         msg = update["message"]
         chat_id = msg.get("chat", {}).get("id")
-        text = msg.get("text", "").lower() # normalizar a minúsculas
+        text = msg.get("text", "").strip() # No lowercase yet, to preserve formatting if needed
         
-        # Regex flexible: "dame la lista del super", "ver lista compra", "lista viaje"
-        import re
-        match_lista = re.search(r'(?:dame|ver|consultar|mostrar|tengo)?\s*(?:la\s+)?lista\s+(?:de\s+|del\s+|para\s+el\s+|para\s+la\s+|para\s+)?(.+)', text)
-        
-        if match_lista:
-            lista_nombre = match_lista.group(1).strip().title() # "Supermercado"
-            
+        lista_nombre = None
+
+        # Opción A: Atajo con "@" (Ej: "@Super")
+        if text.startswith("@"):
+            lista_nombre = text[1:].strip().title() # Quitar "@" y capitalizar
+
+        # Opción B: Comando verbal (Ej: "dame la lista del super")
+        if not lista_nombre:
+            import re
+            # Regex flexible: "dame la lista del super", "ver lista compra", "lista viaje"
+            match_lista = re.search(r'(?:dame|ver|consultar|mostrar|tengo)?\s*(?:la\s+)?lista\s+(?:de\s+|del\s+|para\s+el\s+|para\s+la\s+|para\s+)?(.+)', text, re.IGNORECASE)
+            if match_lista and "lista" in text.lower(): # Ensure "lista" keyword is present to avoid false positives if regex is too loose
+                 lista_nombre = match_lista.group(1).strip().title()
+
+        if lista_nombre:
             # Consultar Notion
             url_query = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
             headers = {
