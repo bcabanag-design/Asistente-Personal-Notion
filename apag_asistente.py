@@ -749,7 +749,9 @@ def create_task_logic(comando, chat_id=None):
                         priority_safe = items_a_guardar[0]["Prioridad"]["select"]["name"]
                         
                         # Start Timer
-                        timer = threading.Timer(diff_int, send_reminder_now, args=[title_safe, priority_safe, new_page_id])
+                        # Start Timer
+                        to_chat = str(chat_id) if chat_id else TELEGRAM_CHAT_ID
+                        timer = threading.Timer(diff_int, send_reminder_now, args=[title_safe, priority_safe, new_page_id, to_chat])
                         timer.start()
                     except Exception as e:
                          print(f"Error starting timer: {e}")
@@ -1159,9 +1161,12 @@ def daily_summary():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 # --- INTERNAL SCHEDULER (IMMEDIATE REMINDERS) ---
-def send_reminder_now(title, priority, page_id):
+def send_reminder_now(title, priority, page_id, chat_id_target=None):
     """Function to send a reminder immediately via threading."""
     try:
+        # Use target chat or fallback to env var
+        final_chat_id = chat_id_target if chat_id_target else TELEGRAM_CHAT_ID
+        
         # Wait a bit or logic handled by Timer
          # Construir payload de mensaje
         icon = "🔴" if "Alta" in priority or "Urgente" in priority else "🔵"
@@ -1176,7 +1181,7 @@ def send_reminder_now(title, priority, page_id):
         
         tg_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(tg_url, json={
-            "chat_id": TELEGRAM_CHAT_ID,
+            "chat_id": final_chat_id,
             "text": msg_text,
             "parse_mode": "Markdown",
             "reply_markup": reply_markup
