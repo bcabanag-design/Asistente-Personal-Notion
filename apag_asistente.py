@@ -21,17 +21,50 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
 
-def consultar_ia(mensaje, contexto=""):
+# Lista de modelos priorizados para fallback
+GEMINI_MODELS = [
+    "gemini-1.5-flash", 
+    "gemini-2.0-flash-lite", 
+    "gemini-flash-lite-latest",
+    "gemini-flash-latest",
+    "gemini-pro"
+]
+
+def generate_with_fallback(prompt_text):
     """
-    Usa Google Gemini Flash para responder a preguntas o conversaciones.
+    Intenta generar contenido probando múltiples modelos en orden.
+    Retorna el texto generado o None si todos fallan.
     """
     if not GOOGLE_API_KEY:
-        return "⚠️ No tengo activado mi cerebro de IA (Falta API Key)."
-    
+        print("Error: No API Key")
+        return None
+
+    last_error = ""
+    for model_name in GEMINI_MODELS:
+        try:
+            print(f"DEBUG: Intentando modelo {model_name}...")
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt_text)
+            if response and response.text:
+                print(f"DEBUG: Éxito con {model_name}")
+                return response.text.strip()
+        except Exception as e:
+            error_msg = str(e)
+            print(f"DEBUG: Falló {model_name}: {error_msg}")
+            
+            # Si es un error de seguridad/filtro (400) o invalidez, no reintentamos con otros si el prompt es malo.
+            # Pero aquí asumimos que son errores de Quota (429) o Not Found (404).
+            last_error = error_msg
+            continue
+
+    print(f"DEBUG: Todos los modelos fallaron. Último error: {last_error}")
+    raise Exception(f"All models failed. Last: {last_error}")
+
+def consultar_ia(mensaje, contexto=""):
+    """
+    Usa Google Gemini para responder a peregrates, con fallback de modelos.
+    """
     try:
-        # Usamos 'gemini-1.5-flash' (Estándar Estable)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
         system_prompt = f"""
         Eres un asistente personal útil y amigable. Tu dueño se llama Bernardo.
         Responde de forma concisa y directa. SIEMPRE en español.
@@ -47,11 +80,10 @@ def consultar_ia(mensaje, contexto=""):
         
         full_prompt = f"{system_prompt}\n\nContexto adicional: {contexto}\n\nUsuario: {mensaje}"
         
-        response = model.generate_content(full_prompt)
-        return response.text.strip()
+        return generate_with_fallback(full_prompt)
+
     except Exception as e:
-        print(f"Error Gemini: {e}")
-        return f"⚠️ Error pensando: {str(e)}"
+        return f"⚠️ Error pensando (Todos los modelos ocupados): {str(e)}"
 import time
 
 # --- CONFIGURACIÓN DE NOTION ---
@@ -495,8 +527,6 @@ def ai_parse_task(text, prev_context=None):
     if not GOOGLE_API_KEY: return None
 
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
         import pytz
         tz = pytz.timezone(TIMEZONE)
         ahora = datetime.now(tz)
@@ -539,11 +569,13 @@ def ai_parse_task(text, prev_context=None):
         USUARIO: "{text}"
         """
         
-        response = model.generate_content(prompt)
-        raw_json = response.text.strip()
+        # USA EL HELPER CON FALLBACK
+        raw_json = generate_with_fallback(prompt)
+        
+        if not raw_json: return None
         
         if "```json" in raw_json: raw_json = raw_json.replace("```json", "").replace("```", "")
-        if raw_json.lower() == "null": return None
+        if raw_json.lower() == "null" or raw_json.strip() == "null": return None
 
         data = json.loads(raw_json)
         return data
