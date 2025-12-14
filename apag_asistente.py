@@ -508,25 +508,29 @@ def ai_parse_task(text):
         
         INSTRUCCIONES:
         1. Analiza el texto del usuario.
-        2. Determina si es un COMANDO de tarea/lista O si es charla/queja.
-           - Si es charla ("Hola", "Gracias", "No funcionó", "Te equivocaste"), devuelve null.
-        3. Si es tarea, Extrae:
-           - "title": El qué (limpio de palabras como "agéndame", "recordarme", fechas).
-           - "date_iso": FECHA Y HORA EXACTA en formato ISO 8601 (YYYY-MM-DDTHH:MM:SS).
-             * CRÍTICO: Busca explícitamente horas como "3 de la tarde" (15:00), "3pm", "a las 3", "por la tarde".
-             * Si dice "tarde" sin hora, usa 18:00. Si dice "mañana" sin hora, usa 09:00.
-             * Si NO menciona hora en absoluto, usa 09:00:00.
-           - "reminder_iso": Fecha de recordatorio explícita (si dice "avisarme a las X") o null.
-           - "list": Nombre de la lista (si dice "para la lista X" o "lista X") o null.
-           - "priority": "Alta", "Media", "Baja" (basado en palabras clave).
+        2. FILTRO DE CHARLA/QUEJA/REFERENCIA:
+           - Si es charla ("Hola", "Gracias"): null.
+           - Si es queja ("No funcionó", "Te equivocaste"): null.
+           - Si es REFERENCIA VAGA ("Agéndame lo anterior", "Corrige la tarea de recién", "Haz lo que dije antes"): null. (El usuario debe repetir el comando).
+        3. Si es un comando claro:
+           - "title": El qué.
+           - "date_iso": Formato ISO 8601 LOCAL (YYYY-MM-DDTHH:MM:SS).
+             * NO CONVERTIR A UTC. Usa la hora tal cual la pide el usuario.
+             * "3 de la tarde" = 15:00:00.
+             * "3pm" = 15:00:00.
+             * Si no hay hora: usa 09:00:00.
+           - "priority": Alta/Media/Baja.
         
-        FORMATO RESPUESTA (SOLO JSON o null):
-        {{
-            "title": "...",
-            "date_iso": "...",
-            ...
-        }}
+        EJEMPLOS (Date Context: 2025-12-13):
+        - Input: "Pagar luz el viernes a las 3 de la tarde"
+          Output: {{"title": "Pagar luz", "date_iso": "2025-12-19T15:00:00", "priority": "Media"}}
         
+        - Input: "Cita con médico mañana a las 10am"
+          Output: {{"title": "Cita con médico", "date_iso": "2025-12-14T10:00:00", "priority": "Media"}}
+        
+        - Input: "Comprar pan"
+          Output: {{"title": "Comprar pan", "date_iso": "2025-12-13T09:00:00", "priority": "Media"}} (Default fecha hoy, hora 9am)
+
         USUARIO: "{text}"
         """
         
