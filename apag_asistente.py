@@ -497,7 +497,9 @@ def ai_parse_task(text, prev_context=None):
     try:
         model = genai.GenerativeModel('gemini-flash-latest')
         
-        ahora = datetime.now()
+        import pytz
+        tz = pytz.timezone(TIMEZONE)
+        ahora = datetime.now(tz)
         hoy_str = ahora.strftime('%Y-%m-%d %H:%M:%S')
         dia_semana = ahora.strftime('%A')
         
@@ -570,18 +572,44 @@ def build_notion_payload_from_ai(ai_data):
         props["Lista"] = {"select": {"name": list_name}}
         
     if date_iso:
-        props["Fecha/Hora de Tarea"] = {"date": {"start": date_iso}}
-        final_reminder = rem_iso if rem_iso else date_iso
-        props["Fecha de Recordatorio"] = {"date": {"start": final_reminder}}
-    
-    meta = {}
-    if date_iso:
+        # CORRECCIÓN DE TIMEZONE:
+        # La IA devuelve ISO ingenuo ("2025-10-20T09:00:00").
+        # Notion necesita ISO con OFFSET si queremos que sea hora local ("...-05:00").
         try:
-             import dateparser
-             dt = dateparser.parse(final_reminder)
-             meta["reminder_dt"] = dt
-        except:
-            pass
+            import pytz
+            tz = pytz.timezone(TIMEZONE)
+            
+            # Helper para localizar fecha ingenua
+            def localize_iso(iso_str):
+                if not iso_str: return None
+                try:
+                    # dateparser es bueno parseando
+                    dt = dateparser.parse(iso_str)
+                    if dt:
+                        # Si no tiene timezone, se lo ponemos
+                        if dt.tzinfo is None:
+                            dt = tz.localize(dt)
+                        return dt.isoformat()
+                except:
+                    return iso_str
+                return iso_str
+
+            final_date_iso = localize_iso(date_iso)
+            final_reminder = rem_iso if rem_iso else date_iso
+            final_reminder_iso = localize_iso(final_reminder)
+            
+            props["Fecha/Hora de Tarea"] = {"date": {"start": final_date_iso}}
+            props["Fecha de Recordatorio"] = {"date": {"start": final_reminder_iso}}
+            
+            # Meta data para el scheduler (threading)
+            # Ya tenemos los strings con offset, pero el scheduler interno usa date objects
+            meta["reminder_dt"] = dateparser.parse(final_reminder_iso)
+            
+        except Exception as e:
+            print(f"Timezone fix error: {e}")
+            # Fallback a lo crudo
+            props["Fecha/Hora de Tarea"] = {"date": {"start": date_iso}}
+            props["Fecha de Recordatorio"] = {"date": {"start": date_iso}}
             
     return props, meta
 
