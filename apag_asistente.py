@@ -1523,6 +1523,12 @@ def telegram_webhook():
             question_pattern = r'^(qué|que|cómo|como|cuándo|cuando|dónde|donde|por\s+qué|quién|quien|hola|buenos|buenas|sabes|puedes|crees|tienes|podrías|podrias|cuál|cual|dime|explicame|explícame)\b'
             is_question = re.match(question_pattern, text, re.IGNORECASE) or "?" in text
             
+            # EXCEPCIÓN: Si contiene verbos de acción explícitos, ES TAREA, no pregunta.
+            # Ej: "Puedes agendar esto?" -> TAREA
+            task_verbs = r'(agendar|agenda|recordar|recu[ée]rdame|anotar|anota|crear|lista|poner|agrega)'
+            if re.search(task_verbs, text, re.IGNORECASE):
+                is_question = False
+
             if is_question:
                 # Caso directo: Es charla
                 ai_reply = consultar_ia(text)
