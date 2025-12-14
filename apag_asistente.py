@@ -504,7 +504,9 @@ def ai_parse_task(text):
         1. Analiza el texto del usuario.
         2. Extrae:
            - "title": El qué (limpio de palabras como "agéndame", "recordarme", fechas).
-           - "date_iso": Fecha de ejecución en formato ISO 8601 (YYYY-MM-DDTHH:MM:SS) o null.
+           - "date_iso": FECHA Y HORA EXACTA de ejecución en formato ISO 8601 (YYYY-MM-DDTHH:MM:SS). 
+             * IMPORTANTE: Si el usuario dice 'a las 3pm', 'a las 15:00', o 'por la tarde', DEBES incluír esa hora en el ISO.
+             * Si NO dice hora, usa 09:00:00 por defecto.
            - "reminder_iso": Fecha de recordatorio explícita (si dice "avisarme a las X") o null.
            - "list": Nombre de la lista (si dice "para la lista X" o "lista X") o null.
            - "priority": "Alta", "Media", "Baja" (basado en palabras clave).
