@@ -483,67 +483,65 @@ def process_command(comando_completo):
     return properties, meta_data
 
 # --- 2.5 AI PARSING LOGIC (SMART EXTRACTION) ---
-def ai_parse_task(text):
+# Global simple memory
+USER_CONTEXT = {}
+
+# --- 2.5 AI PARSING LOGIC (SMART EXTRACTION) ---
+def ai_parse_task(text, prev_context=None):
     """
-    Usa Gemini para extraer estructuradamente: Título, Fechas, listas, etc.
-    Retorna un diccionario limpio o None si falla.
+    Usa Gemini para extraer estructuradamente.
+    prev_context: String con el comando ANTERIOR del usuario (si existe).
     """
     if not GOOGLE_API_KEY: return None
 
     try:
         model = genai.GenerativeModel('gemini-flash-latest')
         
-        # Contexto temporal vital para fechas relativas
         ahora = datetime.now()
         hoy_str = ahora.strftime('%Y-%m-%d %H:%M:%S')
         dia_semana = ahora.strftime('%A')
         
+        # Inyectamos el contexto anterior si existe
+        context_instruction = ""
+        if prev_context:
+            context_instruction = f"""
+            ATENCIÓN: El usuario se refiere a un comando ANTERIOR.
+            Comando previo: "{prev_context}"
+            Nueva instrucción del usuario: "{text}"
+            
+            TU TAREA: Deducir el comando final combinando ambos.
+            Ejemplo: Previo="Pagar luz", Nuevo="A las 3pm" -> Titulo="Pagar luz", Fecha="...T15:00:00"
+            """
+
         prompt = f"""
-        Actúa como un parser de tareas inteligente. Tu objetivo es convertir lenguaje natural en JSON estructurado.
+        Actúa como un parser de tareas inteligente.
         
         CONTEXTO ACTUAL:
-        - Fecha/Hora actual: {hoy_str}
-        - Día de la semana: {dia_semana}
+        - Fecha/Hora actual: {hoy_str} (Dia: {dia_semana})
         - Timezone: {TIMEZONE}
+        {context_instruction}
         
         INSTRUCCIONES:
-        1. Analiza el texto del usuario.
-        2. FILTRO DE CHARLA/QUEJA/REFERENCIA:
-           - Si es charla ("Hola", "Gracias"): null.
-           - Si es queja ("No funcionó", "Te equivocaste"): null.
-           - Si es REFERENCIA VAGA ("Agéndame lo anterior", "Corrige la tarea de recién", "Haz lo que dije antes"): null. (El usuario debe repetir el comando).
-        3. Si es un comando claro:
+        1. Analiza el texto.
+        2. FILTRO DE CHARLA/QUEJA:
+           - Si es charla ("Hola"): null.
+           - Si es queja ("No funcionó"): null.
+           - Si es REFERENCIA ("Lo anterior", "Corrige eso") y NO tengo Contexto previo: null (Devuelve null para que el bot pregunte).
+           - Si es REFERENCIA y SI tengo Contexto: ¡COMBINA Y REPARA!
+        
+        3. Extracción (Formato JSON):
            - "title": El qué.
-           - "date_iso": Formato ISO 8601 LOCAL (YYYY-MM-DDTHH:MM:SS).
-             * NO CONVERTIR A UTC. Usa la hora tal cual la pide el usuario.
-             * "3 de la tarde" = 15:00:00.
-             * "3pm" = 15:00:00.
-             * Si no hay hora: usa 09:00:00.
+           - "date_iso": ISO 8601 LOCAL (YYYY-MM-DDTHH:MM:SS). NO UTC.
            - "priority": Alta/Media/Baja.
-        
-        EJEMPLOS (Date Context: 2025-12-13):
-        - Input: "Pagar luz el viernes a las 3 de la tarde"
-          Output: {{"title": "Pagar luz", "date_iso": "2025-12-19T15:00:00", "priority": "Media"}}
-        
-        - Input: "Cita con médico mañana a las 10am"
-          Output: {{"title": "Cita con médico", "date_iso": "2025-12-14T10:00:00", "priority": "Media"}}
-        
-        - Input: "Comprar pan"
-          Output: {{"title": "Comprar pan", "date_iso": "2025-12-13T09:00:00", "priority": "Media"}} (Default fecha hoy, hora 9am)
-
+           
         USUARIO: "{text}"
         """
         
         response = model.generate_content(prompt)
         raw_json = response.text.strip()
         
-        # Limpieza simple por si la IA pone backticks
-        if "```json" in raw_json:
-            raw_json = raw_json.replace("```json", "").replace("```", "")
-        
-        # Manejo de "null" literal
-        if raw_json.lower() == "null":
-            return None
+        if "```json" in raw_json: raw_json = raw_json.replace("```json", "").replace("```", "")
+        if raw_json.lower() == "null": return None
 
         data = json.loads(raw_json)
         return data
@@ -565,7 +563,7 @@ def build_notion_payload_from_ai(ai_data):
         "Nombre": {"title": [{"text": {"content": title}}]},
         "Prioridad": {"select": {"name": prio}},
         "Estado": {"status": {"name": "Sin empezar"}},
-        "Base del Registro": {"select": {"name": "Manual"}} # Marcamos como IA/Manual
+        "Base del Registro": {"select": {"name": "Manual"}}
     }
     
     if list_name:
@@ -573,20 +571,13 @@ def build_notion_payload_from_ai(ai_data):
         
     if date_iso:
         props["Fecha/Hora de Tarea"] = {"date": {"start": date_iso}}
-        
-        # Lógica de recordatorio
-        # Si la IA detectó recordatorio explícito, úsalo.
-        # Si no, usa la misma fecha de tarea (comportamiento default).
         final_reminder = rem_iso if rem_iso else date_iso
         props["Fecha de Recordatorio"] = {"date": {"start": final_reminder}}
     
-    # Meta data para el scheduler (threading)
     meta = {}
     if date_iso:
-        # Calcular reminder_dt para el scheduler inmediato
-        # Necesitamos objeto datetime
         try:
-             # dateparser es robusto para convertir ISO a obj
+             import dateparser
              dt = dateparser.parse(final_reminder)
              meta["reminder_dt"] = dt
         except:
@@ -594,38 +585,51 @@ def build_notion_payload_from_ai(ai_data):
             
     return props, meta
 
-def create_task_logic(comando):
+def create_task_logic(comando, chat_id=None):
     """
     Lógica central para crear tareas en Notion.
-    ESTRATEGIA: IA PRIMERO -> FALLBACK REGEX
     """
     if not comando:
         return {"error": "No se recibió el comando"}, 400
-
-    print(f"DEBUG: Processing command: '{comando}'")
     
-    # 1. INTENTO CON IA (Smart Parsing)
+    # 1. RECUPERAR CONTEXTO
+    prev_context = None
+    if chat_id and str(chat_id) in USER_CONTEXT:
+        prev_context = USER_CONTEXT[str(chat_id)]
+        print(f"DEBUG: Found valid context for chat {chat_id}: {prev_context}")
+
+    # 2. INTENTO CON IA
     properties_payload = None
     meta_data = {}
     
     try:
-        print("DEBUG: Attempting AI Parsing...")
-        ai_result = ai_parse_task(comando)
+        ai_result = ai_parse_task(comando, prev_context=prev_context)
         
         if ai_result and ai_result.get("title"):
-            print(f"DEBUG: AI Success. Result: {ai_result}")
-            properties_payload, meta_data = build_notion_payload_from_ai(ai_result)
+             print(f"DEBUG: AI Success. Result: {ai_result}")
+             properties_payload, meta_data = build_notion_payload_from_ai(ai_result)
+             
+             # GUARDAR CONTEXTO (Si hubo éxito)
+             # Guardamos "Titulo + Fecha" textual para que la IA entienda el estado actual si se corrige despues
+             # Mejor: guardamos el prompt 'original' reconstruido o el titulo simple.
+             # Simplificación: Guardamos lo que el usuario pidió ahora (o la combinación).
+             # Si fue una corrección, el 'comando' actual es solo la corrección. 
+             # La IA ya nos dio el TITULO COMPLETO. Guardemos eso como el "nuevo contexto".
+             if chat_id:
+                 USER_CONTEXT[str(chat_id)] = f"Tarea: {ai_result.get('title')}. Fecha: {ai_result.get('date_iso')}"
         else:
-             print("DEBUG: AI returned empty or invalid result.")
-    except Exception as e:
-        print(f"DEBUG: AI Failed or Crashed: {e}")
-    
-    # 2. FALLBACK: SI LA IA FALLÓ, USAR REGEX ANTIGUO
-    if not properties_payload:
-        print("DEBUG: Falling back to LEGACY Regex Parsing...")
-        properties_payload, meta_data = process_command(comando)
+             print("DEBUG: AI returned empty.")
 
-    # --- VALIDACIONES FINALES ---
+    except Exception as e:
+        print(f"DEBUG: AI Failed: {e}")
+    
+    # 3. FALLBACK REGEX
+    if not properties_payload:
+        properties_payload, meta_data = process_command(comando)
+        # Si funciona el regex, guardamos el comando crudo como contexto
+        if properties_payload and chat_id:
+             USER_CONTEXT[str(chat_id)] = comando
+
     if properties_payload is None:
         return {"error": meta_data.get("error", "Error desconocido")}, 400
 
@@ -1538,8 +1542,8 @@ def telegram_webhook():
                 ai_reply = consultar_ia(text)
                 msg_response = ai_reply
             else:
-                # Intentamos crear tarea
-                result, code = create_task_logic(text)
+                # Intentamos crear tarea (Pasamos chat_id para memoria)
+                result, code = create_task_logic(text, chat_id=chat_id)
                 
                 created_title = result.get("titulo_principal", "Tarea")
                 
