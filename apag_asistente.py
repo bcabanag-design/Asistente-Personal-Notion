@@ -29,8 +29,8 @@ def consultar_ia(mensaje, contexto=""):
         return "⚠️ No tengo activado mi cerebro de IA (Falta API Key)."
     
     try:
-        # Usamos 'gemini-flash-latest' como fallback general
-        model = genai.GenerativeModel('gemini-flash-latest')
+        # Usamos 'gemini-2.0-flash-lite' para evitar límites de quota de modelos Pro/Latest
+        model = genai.GenerativeModel('gemini-2.0-flash-lite')
         
         system_prompt = f"""
         Eres un asistente personal útil y amigable. Tu dueño se llama Bernardo.
@@ -495,7 +495,7 @@ def ai_parse_task(text, prev_context=None):
     if not GOOGLE_API_KEY: return None
 
     try:
-        model = genai.GenerativeModel('gemini-flash-latest')
+        model = genai.GenerativeModel('gemini-2.0-flash-lite')
         
         import pytz
         tz = pytz.timezone(TIMEZONE)
