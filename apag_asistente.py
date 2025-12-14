@@ -194,7 +194,7 @@ def process_command(comando_completo):
 
     # Limpieza final del título
     # Remover conectores residuales al inicio y "agenda"
-    tarea_titulo = re.sub(r'^(ag[eé]ndame\s+|agenda\s+que\s+|agenda\s+|poner\s+|agregar\s+|anotar\s+|avisar\s+|avisa\s+|avisame\s+|avísame\s+|recuerda\s+|recuérdame\s+|recuerdame\s+|hazme\s+acordar\s+(?:que\s+)?|hacerme\s+acordar\s+(?:que\s+)?|que\s+|para\s+|tengo\s+que\s+)', '', tarea_titulo, flags=re.IGNORECASE)
+    tarea_titulo = re.sub(r'^(ag[eé]ndame\s+|agendar\s+|agenda\s+que\s+|agenda\s+|poner\s+|agregar\s+|anotar\s+|avisar\s+|avisa\s+|avisame\s+|avísame\s+|recuerda\s+|recuérdame\s+|recuerdame\s+|hazme\s+acordar\s+(?:que\s+)?|hacerme\s+acordar\s+(?:que\s+)?|que\s+|para\s+|tengo\s+que\s+)', '', tarea_titulo, flags=re.IGNORECASE)
     # Remover espacios múltiples
     tarea_titulo = re.sub(r'\s{2,}', ' ', tarea_titulo).strip()
 
