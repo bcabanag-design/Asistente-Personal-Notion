@@ -36,6 +36,12 @@ def consultar_ia(mensaje, contexto=""):
         Eres un asistente personal útil y amigable. Tu dueño se llama Bernardo.
         Responde de forma concisa y directa. SIEMPRE en español.
         
+        IMPORTANTE: Tú eres la "mente conversacional". NO tienes acceso directo para crear o editar tareas en Notion.
+        Si el usuario te pide "agendar", "crear tarea", "corregir recordatorio" o "recordar algo":
+        - NO digas "Listo" ni "Agendando".
+        - Explícale amablemente que debe enviar el comando como un mensaje nuevo (no como pregunta) para que tu módulo de acción lo capture.
+        - O simplemente responde: "Por favor, dímelo como una orden directa (ej: 'Recordarme X') para poder agendarlo."
+        
         Si te preguntan por fechas, hoy es: {datetime.now().strftime('%A %d de %B de %Y, hora %H:%M')}.
         """
         
@@ -502,25 +508,23 @@ def ai_parse_task(text):
         
         INSTRUCCIONES:
         1. Analiza el texto del usuario.
-        2. Extrae:
+        2. Determina si es un COMANDO de tarea/lista O si es charla/queja.
+           - Si es charla ("Hola", "Gracias", "No funcionó", "Te equivocaste"), devuelve null.
+        3. Si es tarea, Extrae:
            - "title": El qué (limpio de palabras como "agéndame", "recordarme", fechas).
-           - "date_iso": FECHA Y HORA EXACTA de ejecución en formato ISO 8601 (YYYY-MM-DDTHH:MM:SS). 
-             * IMPORTANTE: Si el usuario dice 'a las 3pm', 'a las 15:00', o 'por la tarde', DEBES incluír esa hora en el ISO.
-             * Si NO dice hora, usa 09:00:00 por defecto.
+           - "date_iso": FECHA Y HORA EXACTA en formato ISO 8601 (YYYY-MM-DDTHH:MM:SS).
+             * CRÍTICO: Busca explícitamente horas como "3 de la tarde" (15:00), "3pm", "a las 3", "por la tarde".
+             * Si dice "tarde" sin hora, usa 18:00. Si dice "mañana" sin hora, usa 09:00.
+             * Si NO menciona hora en absoluto, usa 09:00:00.
            - "reminder_iso": Fecha de recordatorio explícita (si dice "avisarme a las X") o null.
            - "list": Nombre de la lista (si dice "para la lista X" o "lista X") o null.
            - "priority": "Alta", "Media", "Baja" (basado en palabras clave).
-        3. Si no hay fecha explícita, date_iso = null.
-        4. "reminder_iso" es SOLO si el usuario pide explícitamente una alerta distinta a la hora del evento (ej: "Cita a las 10, avisar a las 9").
-           Si no dice nada de avisar, reminder_iso = null.
         
-        FORMATO RESPUESTA (SOLO JSON):
+        FORMATO RESPUESTA (SOLO JSON o null):
         {{
-            "title": "Comprar leche",
-            "date_iso": "2025-10-20T10:00:00",
-            "reminder_iso": "2025-10-20T09:00:00",
-            "list": "Mercado",
-            "priority": "Media"
+            "title": "...",
+            "date_iso": "...",
+            ...
         }}
         
         USUARIO: "{text}"
@@ -533,6 +537,10 @@ def ai_parse_task(text):
         if "```json" in raw_json:
             raw_json = raw_json.replace("```json", "").replace("```", "")
         
+        # Manejo de "null" literal
+        if raw_json.lower() == "null":
+            return None
+
         data = json.loads(raw_json)
         return data
         
