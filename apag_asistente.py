@@ -96,7 +96,17 @@ TIMEZONE = 'America/Lima'
 app = Flask(__name__)
 
 # --- ESTADO GLOBAL ---
+# --- ESTADO GLOBAL ---
 PENDING_SNOOZE = {} # Format: {chat_id: page_id}
+
+# --- MAPEO DE USUARIOS (FASE 7) ---
+# En el futuro, esto podría venir de una DB o .env json
+USER_MAP = {
+    # Bernardo (Admin) - ID confirmed from code
+    2135365686: {"name": "Bernardo", "role": "admin"},
+    # Yaneth (User)
+    8209781539: {"name": "Yaneth", "role": "user"} 
+}
 
 
 # Función para convertir fechas de Python a formato ISO 8601 (requerido por Notion)
@@ -718,6 +728,30 @@ def create_task_logic(comando, chat_id=None):
     else:
         items_a_guardar.append(properties_payload)
 
+    # --- FASE 7: INYECCIÓN DE IDENTIDAD FEDERADA ---
+    # Determinar Dueño
+    # Si tenemos chat_id, buscamos en mapa. Si no, default "Bernardo" (Admin Single Player)
+    current_owner = "Bernardo" # Default Master Plan
+    current_vis = "Privado"
+    current_device = "Móvil" # Por defecto si viene de Telegram
+    
+    if chat_id:
+        # Intento de búsqueda segura (convertir a int si es str)
+        try:
+            cid_int = int(chat_id)
+            if cid_int in USER_MAP:
+                current_owner = USER_MAP[cid_int]["name"]
+        except:
+            pass
+            
+    # Inyectar en cada item (por si es multilista)
+    for item_props in items_a_guardar:
+        item_props["Propietario"] = {"select": {"name": current_owner}}
+        item_props["Visibilidad"] = {"select": {"name": current_vis}}
+        item_props["DispositivoD"] = {"select": {"name": current_device}}
+        
+    # -----------------------------------------------
+
     url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -1006,7 +1040,11 @@ def check_reminders():
         "Notion-Version": "2022-06-28"
     }
     
-    # Filtro: (Fecha >= Ayer) AND (Fecha <= Ahora + 2h) AND (Estado != Listo)
+    # Filtro: (Fecha >= Ayer) AND (Fecha <= Ahora + 2h) AND (Estado != Listo) AND (Propietario == Bernardo)
+    # NOTA: check_reminders es un cron global. Por ahora lo hacemos solo para BERNARDO.
+    # En el futuro debería iterar sobre todos los usuarios del USER_MAP.
+    target_owner = "Bernardo"
+    
     query_payload = {
         "filter": {
             "and": [
@@ -1026,6 +1064,12 @@ def check_reminders():
                     "property": "Estado",
                     "status": {
                         "does_not_equal": "Listo"
+                    }
+                },
+                {
+                    "property": "Propietario",
+                    "select": {
+                        "equals": target_owner
                     }
                 }
             ]
@@ -1120,6 +1164,10 @@ def daily_summary():
     url_query = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
     headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
     
+    # Identificar Usuario (Para reporte diario, por defecto Bernardo si se llama directo)
+    # Si quisieramos reporte para otro, necesitariamos pasarle el user.
+    target_owner = "Bernardo"
+
     query_payload = {
         "filter": {
             "and": [
@@ -1130,6 +1178,10 @@ def daily_summary():
                 {
                     "property": "Fecha de Recordatorio",
                     "date": {"on_or_before": end_day.isoformat()}
+                },
+                {
+                    "property": "Propietario",
+                    "select": {"equals": target_owner}
                 }
             ]
         },
@@ -1403,8 +1455,23 @@ def telegram_webhook():
                  
                  url_query = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
                  headers_notion = {"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
+                 # Recuperar dueño (VOZ - Usamos chat_id que viene del mensaje)
+                 current_owner = "Bernardo"
+                 if str(chat_id) in USER_MAP: # USER_MAP keys are int in definition but let's be safe
+                    pass # Done in mapping
+                 # Better:
+                 try: 
+                    current_owner = USER_MAP.get(int(chat_id), {}).get("name", "Bernardo")
+                 except: pass
+
                  q_payload = {
-                    "filter": {"and": [{"property": "Fecha de Recordatorio", "date": {"on_or_after": start_day.isoformat()}}, {"property": "Fecha de Recordatorio", "date": {"on_or_before": end_day.isoformat()}}]},
+                    "filter": {
+                        "and": [
+                            {"property": "Fecha de Recordatorio", "date": {"on_or_after": start_day.isoformat()}}, 
+                            {"property": "Fecha de Recordatorio", "date": {"on_or_before": end_day.isoformat()}},
+                            {"property": "Propietario", "select": {"equals": current_owner}}
+                        ]
+                    },
                     "sorts": [{"property": "Fecha de Recordatorio", "direction": "ascending"}]
                  }
                  data_n = requests.post(url_query, headers=headers_notion, json=q_payload).json()
@@ -1420,7 +1487,7 @@ def telegram_webhook():
                  
             else:
                 # B. CREAR TAREA (Default)
-                result, code = create_task_logic(text)
+                result, code = create_task_logic(text, chat_id=chat_id)
                 if code == 200:
                     created_title = result.get("titulo_principal", "Tarea")
                     is_soon = result.get("smart_schedule", {}).get("is_soon", False)
@@ -1460,6 +1527,30 @@ def telegram_webhook():
             page_id = PENDING_SNOOZE[str(chat_id)]
             handle_snooze_response(chat_id, text, page_id)
             del PENDING_SNOOZE[str(chat_id)]
+            return "OK", 200
+
+        # --- HELP COMMAND (/ayuda or /start) ---
+        if text.lower() in ["/ayuda", "/start", "ayuda", "help", "comandos"]:
+            msg_help = (
+                "🤖 *Centro de Comando APAG*\n\n"
+                "📋 *Gestión de Tareas:*\n"
+                "• \"Comprar leche\" -> Crea tarea\n"
+                "• \"Ver lista Super\" -> Muestra lista\n"
+                "• \"Qué tengo mañana\" -> Agenda\n\n"
+                
+                "🧠 *Acciones Inteligentes (PC):*\n"
+                "• \"Resumir [link]\" -> Resumen Web\n"
+                "• \"Ocr foto.jpg\" -> Lee texto imagen\n"
+                "• \"Transcribir audio.mp3\" -> A texto\n\n"
+                
+                "🏥 *Mantenimiento:*\n"
+                "• \"/status\" -> Estado de PC (RAM/CPU)\n"
+                "• \"/kill ollama\" -> Cierra IA Local\n"
+                "• \"/reboot\" -> Reinicia Cerebro"
+            )
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
+                "chat_id": chat_id, "text": msg_help, "parse_mode": "Markdown"
+            })
             return "OK", 200
 
         # --- A. DETECTAR LISTA ---
@@ -1542,6 +1633,14 @@ def telegram_webhook():
             
             # Filtro: Fecha Recordatorio dentro del rango OR Fecha Tarea dentro del rango
             # Simplificado: Usaremos Fecha Recordatorio para agenda diaria
+            # Determinar Propietario (TEXTO)
+            current_owner = "Bernardo"
+            try:
+                current_owner = USER_MAP.get(int(chat_id), {}).get("name", "Bernardo")
+            except: pass
+
+            # Filtro: Fecha Recordatorio dentro del rango OR Fecha Tarea dentro del rango
+            # Simplificado: Usaremos Fecha Recordatorio para agenda diaria
             query_payload = {
                 "filter": {
                     "and": [
@@ -1552,6 +1651,10 @@ def telegram_webhook():
                         {
                             "property": "Fecha de Recordatorio",
                             "date": {"on_or_before": end_day.isoformat()}
+                        },
+                        {
+                            "property": "Propietario",
+                            "select": {"equals": current_owner}
                         }
                     ]
                 },
